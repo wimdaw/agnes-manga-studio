@@ -1,0 +1,99 @@
+name: release
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: '发布版本号（例如 v1.6.0，需与 package.json 一致）'
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: build ${{ matrix.label }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            label: windows-x64
+            asset: AgnesStudio-windows-x64.exe
+          - os: macos-13
+            label: macos-x64
+            asset: AgnesStudio-macos-x64.zip
+          - os: macos-14
+            label: macos-arm64
+            asset: AgnesStudio-macos-arm64.zip
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      # 应用本身零运行时依赖；postject 只在打包期用
+      - name: Install build dependency
+        run: npm ci --no-audit --no-fund || npm install --no-audit --no-fund
+
+      - name: Build single-file binary
+        run: node tools/build-exe.mjs
+
+      - name: Package (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          Copy-Item "dist/Agnes漫剧工坊.exe" "${{ matrix.asset }}"
+          Get-Item "${{ matrix.asset }}" | Select-Object Name, Length
+
+      - name: Package (macOS)
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p pkg
+          cp "dist/Agnes漫剧工坊" pkg/AgnesStudio
+          chmod +x pkg/AgnesStudio
+          cp .github/macos-readme.txt pkg/使用说明.txt
+          ditto -c -k --sequesterRsrc --keepParent pkg "${{ matrix.asset }}"
+          ls -lh "${{ matrix.asset }}"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.label }}
+          path: ${{ matrix.asset }}
+          if-no-files-found: error
+
+  release:
+    name: publish release
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
+
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          TAG="${GITHUB_REF_NAME}"
+          if [ "${GITHUB_EVENT_NAME}" = "workflow_dispatch" ]; then
+            TAG="${{ github.event.inputs.tag }}"
+          fi
+          echo "publishing ${TAG}"
+          ls -lh artifacts
+          (cd artifacts && sha256sum * > SHA256SUMS.txt)
+          gh release create "${TAG}" artifacts/* \
+            --repo "${GITHUB_REPOSITORY}" \
+            --title "Agnes 漫剧工坊 ${TAG}" \
+            --notes-file .github/release-notes.md

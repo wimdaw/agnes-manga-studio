@@ -26,3 +26,6 @@ Thumbs.db
 
 # Local scratch
 .synchk/
+
+# Dependencies
+node_modules/
