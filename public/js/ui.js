@@ -85,6 +85,10 @@ export function confirm(o) {
         root.querySelector('[data-yes]').onclick = () => { done = true; close(); resolve(true); };
         root.querySelector('[data-no]').onclick = () => { close(); resolve(false); };
         root.querySelector('[data-yes]').focus();
+        // 确认框里可能带输入控件（例如「连带删除」复选框）。
+        // 确定按钮会先 close() 再 resolve，那时 DOM 已经移除，
+        // 调用方在 await 之后再去读控件必然拿到 null —— 所以让调用方在这里先接上。
+        if (typeof opts.onMount === 'function') opts.onMount(root, close);
       },
     });
     // 点遮罩关闭时也要 resolve(false)

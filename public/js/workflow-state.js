@@ -51,8 +51,11 @@ export function episodeWorkflowState({ projectId, episode, scripts = [], storybo
   const shotStates = shots.map((s) => shotWorkflowState(s, media));
   const hasScript = Boolean(script);
   const hasStoryboard = shots.length > 0;
-  const imagesDone = hasStoryboard && shotStates.every((s) => s.imageReady);
-  const videosDone = hasStoryboard && shotStates.every((s) => s.videoReady);
+  // 必须和 shotWorkflowState.complete 同一套口径：没有提示词的镜头不需要产出。
+  // 否则手工新增的空镜头（image_prompt 为空）永远不可能 imageReady，
+  // 整集就永远停在「补齐分镜图」，而批量出图又说「没有缺失」，成了死循环。
+  const imagesDone = hasStoryboard && shotStates.every((s) => !s.needsImage || s.imageReady);
+  const videosDone = hasStoryboard && shotStates.every((s) => !s.needsVideo || s.videoReady);
   const audioDone = hasStoryboard && shotStates.every((s) => s.audioReady);
   const hasPlan = plans.some((p) => p.project_id === projectId && (Number(p.episode_number) || 1) === ep);
   const stages = [hasScript, hasStoryboard, imagesDone, videosDone, audioDone, hasPlan];

@@ -47,8 +47,39 @@ export default async function editor(container, params) {
   const epSel = container.querySelector('#ep');
   epSel.innerHTML = episodeOptions(episode);
 
-  container.querySelector('#p-picker').onchange = (e) => { projectId = e.target.value; setActiveProject(projectId); planId = ''; load(); };
-  epSel.onchange = () => { episode = Number(epSel.value); planId = ''; load(); };
+  /**
+   * 切换项目/集数前拦一下未保存的调整。
+   * dirty 从 29 行就在维护、界面也显示了「未保存」，但切换时直接 load()，
+   * 人工排序、入出点、转场会一起消失，而且没有任何提示。
+   */
+  async function confirmLeave() {
+    if (!dirty) return true;
+    const ok = await confirm({
+      title: '有未保存的调整',
+      text: '当前时间线有未保存的修改（顺序 / 入出点 / 转场），切换后会丢失。<br>要放弃这些修改吗？',
+      danger: true,
+      okText: '放弃并切换',
+    });
+    if (ok) dirty = false;
+    return ok;
+  }
+
+  container.querySelector('#p-picker').onchange = async (e) => {
+    const next = e.target.value;
+    // 值没变也要重新加载：外部刚建好的方案要靠这次刷新出来
+    if (next !== projectId && !(await confirmLeave())) { e.target.value = projectId; return; }
+    projectId = next;
+    setActiveProject(projectId);
+    planId = '';
+    load();
+  };
+  epSel.onchange = async () => {
+    const next = Number(epSel.value);
+    if (next !== episode && !(await confirmLeave())) { epSel.value = String(episode); return; }
+    episode = next;
+    planId = '';
+    load();
+  };
   container.querySelector('#assemble').onclick = assemble;
   container.querySelector('#save').onclick = save;
   // 必须包一层：直接把 doExport 挂上去的话，点击事件对象会当成 srtMode 传进去
@@ -433,6 +464,26 @@ export default async function editor(container, params) {
     });
   }
 
-  container.addEventListener('DOMNodeRemovedFromDocument', () => { clearTimeout(refreshTimer); offVideo?.(); offStoryboard?.(); }, { once: true });
+  // 页面刷新/关闭时也拦一下未保存的调整；SPA 内部切页由下面返回的 cleanup 负责
+  const onBeforeUnload = (e) => {
+    if (!dirty) return;
+    e.preventDefault();
+    e.returnValue = '';
+  };
+  window.addEventListener('beforeunload', onBeforeUnload);
+
   await load();
+
+  /**
+   * app.js 会把这个返回值登记为页面清理器。
+   * 之前用的是 DOMNodeRemovedFromDocument —— 已废弃，现代浏览器不再派发；
+   * 加上页面根本没返回清理函数，离开剪辑台后 SSE 监听和定时器会一直跑，
+   * 反复进出还会叠加好几份。
+   */
+  return () => {
+    clearTimeout(refreshTimer);
+    offVideo?.();
+    offStoryboard?.();
+    window.removeEventListener('beforeunload', onBeforeUnload);
+  };
 }

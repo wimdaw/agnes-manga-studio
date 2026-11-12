@@ -24,7 +24,7 @@ const os = require('node:os');
 const { spawn, execFile } = require('node:child_process');
 const { createRequire } = require('node:module');
 
-const VERSION = '1.5.0';
+const VERSION = '1.5.1';
 // 资源释放的版本戳用内嵌文件内容哈希（见 materializeAssets），不再依赖版本号。
 
 // ─────────────────────────────────────────────────────────────
@@ -131,7 +131,7 @@ for (const d of [store.imagesDir(), store.videosDir(), store.audiosDir(), store.
 poller.init(store);
 seedLib.seedTemplates(store);
 
-const routes = createRoutes({ store, agnes, poller, jobs, version: VERSION });
+const routes = createRoutes({ store, agnes, poller, jobs, version: VERSION, dataDir: APP_HOME });
 
 // 有 Key 且缓存过期时，启动后后台更新模型目录；不阻塞页面启动。
 // 没有 Key 时不主动报错，用户到设置页填 Key 后点「刷新模型」即可。

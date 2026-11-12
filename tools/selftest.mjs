@@ -277,6 +277,19 @@ group('视频请求体');
   eq('2.5 尾帧', kf25.last_frame, 'https://b.png');
   eq('2.5 多余的图进 images', JSON.stringify(kf25.images), JSON.stringify(['https://c.png']));
 
+  // 中间帧插在第二位时，尾帧不能被它顶掉（调用方就是按 起始/中间/结束 排的）
+  const kfRole = agnes.buildVideoBody({
+    prompt: 'p', mode_25: 'keyframe',
+    source_images: [
+      { url: 'https://start.png', role: '起始画面' },
+      { url: 'https://mid.png', role: '中间帧' },
+      { url: 'https://end.png', role: '目标画面' },
+    ],
+  }, 'agnes-video-2.5');
+  eq('带 role 时首帧取起始画面', kfRole.first_frame, 'https://start.png');
+  eq('带 role 时尾帧取目标画面', kfRole.last_frame, 'https://end.png');
+  eq('中间帧降级为参考图', JSON.stringify(kfRole.images), JSON.stringify(['https://mid.png']));
+
   // 音频：自动把 mode 从 text 提到 reference，否则 Agnes 会拒
   const a25 = agnes.buildVideoBody({ prompt: 'p', mode_25: 'text', audios: ['https://x/1.mp3'] }, 'agnes-video-2.5');
   eq('有音频时 mode 提到 reference', a25.mode, 'reference');

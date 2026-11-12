@@ -453,10 +453,19 @@ group('统一生产状态计算器');
   ok('已有脚本无分镜 → 分镜', scriptOnly.next.page === 'storyboards' && scriptOnly.next.label === '分镜');
   ok('已有脚本无分镜携带 source_script', scriptOnly.next.params.source_script === 'script-3');
 
-  const invalidImage = episodeWorkflowState({ ...base, episode: 3, scripts: [outline, script(3)], storyboards: [shot(3)], images: [image(3, false)], videos: [video(3)] });
+  // 这两条要验证「有产出需求的镜头，媒体失效必须卡住」，所以显式带上提示词；
+  // 没有提示词的镜头按新口径本来就不该阻塞阶段（见下面 withEmpty 用例）
+  const invalidImage = episodeWorkflowState({ ...base, episode: 3, scripts: [outline, script(3)], storyboards: [shot(3, 'shot-3', { image_prompt: '画面', video_prompt: '动作' })], images: [image(3, false)], videos: [video(3)] });
   ok('失效图片媒体不能算完成', invalidImage.imagesDone === false && invalidImage.next.label === '补齐分镜图');
 
-  const invalidVideo = episodeWorkflowState({ ...base, episode: 3, scripts: [outline, script(3)], storyboards: [shot(3)], images: [image(3)], videos: [video(3, false)] });
+  // 没有提示词的镜头不需要产出。之前阶段判定用的是「每个镜头都要有图」，
+  // 一个手工新增的空镜头就会让整集永远停在「补齐分镜图」，而批量出图又提示没有缺失。
+  const emptyShot = shot(3, 'shot-empty', { image_prompt: '', video_prompt: '', linked_image_id: null, linked_video_id: null });
+  const withEmpty = episodeWorkflowState({ ...base, episode: 3, scripts: [outline, script(3)], storyboards: [emptyShot, shot(3)], images: [image(3)], videos: [video(3)] });
+  ok('空提示词镜头不阻塞图片阶段', withEmpty.imagesDone === true, JSON.stringify({ imagesDone: withEmpty.imagesDone }));
+  ok('空提示词镜头不阻塞视频阶段', withEmpty.videosDone === true, JSON.stringify({ videosDone: withEmpty.videosDone }));
+
+  const invalidVideo = episodeWorkflowState({ ...base, episode: 3, scripts: [outline, script(3)], storyboards: [shot(3, 'shot-3', { image_prompt: '画面', video_prompt: '动作' })], images: [image(3)], videos: [video(3, false)] });
   ok('失效视频媒体不能算完成', invalidVideo.imagesDone === true && invalidVideo.videosDone === false && invalidVideo.next.label === '补齐视频');
 
   const voicedShot = shot(3, 'shot-3', { dialogue: '你好', narration: '旁白' });

@@ -5,6 +5,7 @@
  */
 import {
   icon, esc, extractJson, copyText, SHOT_TYPES, STORYBOARD_STATUS, framesForDuration,
+  isVideo25, secondsFor25,
 } from '../consts.js';
 import { api } from '../api.js';
 import { modal, toast, empty, spinner, confirm, options, attachAssetMentions } from '../ui.js';
@@ -18,6 +19,8 @@ export default async function storyboards(container, params) {
   let rows = [];
   const selected = new Set();
   let job = null;
+  let loadSeq = 0;          // 加载令牌：切项目/切集时旧响应不许覆盖新状态
+  let highlightId = '';     // 从任务页跳过来时要定位的镜头
   let mentionImages = [];
   let entityAssets = [];
   let audioAssets = [];
@@ -161,7 +164,30 @@ export default async function storyboards(container, params) {
       el.innerHTML = `<div class="card">${empty('请先选择项目', '右上角下拉选一个项目，或去「项目管理」新建', 'folder')}</div>`;
       return;
     }
+    const seq = ++loadSeq;
+
+    // 从「镜头任务」点「关联镜头」进来时只会带 storyboard id：
+    // 先查它属于第几集，否则会停在第 1 集、目标镜头根本不在这页。
+    if (params.storyboard) {
+      const targetId = params.storyboard;
+      delete params.storyboard;
+      const all = await api.storyboards(projectId);
+      if (seq !== loadSeq) return;
+      const target = (all.ok ? all.data : []).find((s) => s.id === targetId);
+      if (target) {
+        highlightId = target.id;
+        const ep = Number(target.episode_number) || 1;
+        if (ep !== episode) {
+          episode = ep;
+          epSel.value = String(episode);
+        }
+      }
+    }
+
     const [r, imgs, allImgs, entities, audios, tasks, videos, scripts, plans] = await Promise.all([api.storyboards(projectId, episode), api.images(projectId), api.images(), api.assetEntities(projectId), api.audioAssets(projectId), api.tasks(), api.videos(projectId), api.scripts(projectId), api.editPlans(projectId, episode)]);
+    // 这 9 个请求可能跑几百毫秒，期间用户可能已经切了项目或集数。
+    // 不校验令牌的话，旧响应会把新项目的表格、图片映射全部覆盖掉。
+    if (seq !== loadSeq) return;
     if (!r.ok) { el.innerHTML = `<div class="note red">${esc(r.error)}</div>`; return; }
     rows = r.data || [];
     mentionImages = (allImgs.ok && allImgs.data) || (imgs.ok && imgs.data) || [];
@@ -181,6 +207,9 @@ export default async function storyboards(container, params) {
         if (source.episode_number != null && Number(source.episode_number) !== episode) {
           episode = Number(source.episode_number);
           epSel.value = String(episode);
+          // 已取到的 rows 属于旧集，直接拿去渲染会「标题是第 2 集、内容是第 1 集」
+          load();
+          return;
         }
         scriptSelect.value = source.id;
         const input = container.querySelector('#script-in');
@@ -218,7 +247,7 @@ export default async function storyboards(container, params) {
       <tbody>
         ${rows.map((s) => {
           const st = STORYBOARD_STATUS[s.status] || STORYBOARD_STATUS.pending;
-          return `<tr>
+          return `<tr id="row-${esc(s.id)}"${highlightId === s.id ? ' style="outline:1px solid var(--gold);outline-offset:-1px"' : ''}>
             <td><input type="checkbox" data-sel="${esc(s.id)}" ${selected.has(s.id) ? 'checked' : ''} /></td>
             <td style="font-family:var(--mono);color:var(--text)">#${esc(s.shot_number)}</td>
             <td><span class="badge gray">${esc(s.shot_type)}</span></td>
@@ -271,6 +300,11 @@ export default async function storyboards(container, params) {
     el.querySelectorAll('[data-copy-prompt]').forEach((b) => {
       b.onclick = () => copyText(b.getAttribute('data-copy-prompt')).then(() => toast.ok('已复制提示词'));
     });
+    // 从任务页跳过来时把目标镜头滚到视野内，否则用户还是得自己找
+    if (highlightId) {
+      const row = el.querySelector(`#row-${highlightId}`);
+      if (row) row.scrollIntoView({ block: 'center' });
+    }
   }
 
   function promptCell(text) {
@@ -651,6 +685,24 @@ ${text}${assetGuide()}`,
     else toast.ok(`已补齐 ${ok} 条缺失音轨${skipped ? `，跳过 ${skipped} 条已有音轨` : ''}`);
   }
 
+  /**
+   * Video 2.5 的请求参数。
+   * 2.5 不认 num_frames / width / height（传了直接 400），只认 mode_25 / seconds /
+   * size / aspect_ratio。分镜页之前一条都没带，于是默认模型是 2.5 时，
+   * 10 秒的镜头会被固定成 5 秒、图生视频也退化成 text —— 视频生成页有分流，这里没有。
+   */
+  function video25Payload(shot, mode) {
+    if (!isVideo25(state.settings.default_video_model)) return {};
+    const raw = String((state.projects.find((p) => p.id === projectId) || {}).aspect_ratio || '9:16');
+    const ar = ['16:9', '9:16', '1:1', '4:3', '3:4'].find((x) => raw.startsWith(x)) || '9:16';
+    return {
+      mode_25: mode === 'text_to_video' ? 'text' : 'reference',
+      duration_seconds: secondsFor25(shot.duration_seconds),
+      size_25: '720P',
+      aspect_ratio: ar,
+    };
+  }
+
   async function batchVideos() {
     const base = targetShots();
     const states = shotStates(base);
@@ -670,10 +722,11 @@ ${text}${assetGuide()}`,
       const ctx = videoAssetContext(s.video_prompt, s);
       const refs = ctx.refs.filter((r) => r.url !== publicUrl);
       const useMulti = Boolean(publicUrl && refs.length);
+      const mode = useMulti ? 'multi_image' : (publicUrl ? 'image_to_video' : 'text_to_video');
       return {
         project_id: projectId,
         storyboard_id: s.id,
-        mode: useMulti ? 'multi_image' : (publicUrl ? 'image_to_video' : 'text_to_video'),
+        mode,
         prompt: ctx.prompt,
         image: !useMulti ? (publicUrl || undefined) : undefined,
         source_images: useMulti ? [{ url: publicUrl, role: '当前镜头' }, ...refs].slice(0, 8) : undefined,
@@ -683,6 +736,7 @@ ${text}${assetGuide()}`,
         frame_rate: 24,
         width: 1152,
         height: 768,
+        ...video25Payload(s, mode),
       };
     });
     const multi = items.filter((i) => i.mode === 'multi_image').length;
@@ -740,10 +794,11 @@ ${text}${assetGuide()}`,
         ? '这个镜头没有可用的分镜图，本次改用文生视频。'
         : '这个镜头的分镜图只存在本机，Agnes 抓不到，本次改用文生视频。到「设置 → 图床」配一个免费图床后就能自动上传。', 7000);
     }
+    const shotMode = publicUrl ? 'image_to_video' : 'text_to_video';
     const r = await api.createVideo({
       project_id: projectId,
       storyboard_id: s.id,
-      mode: publicUrl ? 'image_to_video' : 'text_to_video',
+      mode: shotMode,
       prompt: videoAssetContext(s.video_prompt, s).prompt,
       image: publicUrl || undefined,
       negative_prompt: s.negative_prompt,
@@ -751,6 +806,7 @@ ${text}${assetGuide()}`,
       frame_rate: 24,
       width: 1152,
       height: 768,
+      ...video25Payload(s, shotMode),
     });
     if (r.ok) { toast.ok('视频任务已提交，去「镜头任务」看进度'); navigate('tasks', { project: projectId }); }
     else toast.err(r.error);

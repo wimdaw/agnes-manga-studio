@@ -368,6 +368,42 @@ try {
       ok(`${m} 模式提交不抛 TypeError`, !all.some((e) => /TypeError|undefined/.test(e)), JSON.stringify(all));
     }
 
+    group('删除项目 · 连带删除勾选');
+    {
+      // confirm 的确定按钮是「先关弹窗再 resolve」，之前调用方在 await 之后
+      // 才去读 #cascade，拿到的是 null —— 勾了等于没勾。这里真点一遍。
+      const base = `http://127.0.0.1:${port}`;
+      const created = await (await fetch(`${base}/api/projects`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: '级联验收剧' }),
+      })).json();
+      await fetch(`${base}/api/storyboards`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ rows: [{ project_id: created.id, episode_number: 1, shot_number: 1, image_prompt: 'x' }] }),
+      });
+
+      await cdp.eval(`location.hash = '#/projects'`);
+      await waitFor(() => cdp.eval(`!!document.querySelector('.proj-card[data-id="${created.id}"]')`), '级联用例项目卡片');
+      await cdp.eval(`(() => { document.querySelector('.proj-card[data-id="${created.id}"] [data-act="del"]').click(); return true; })()`);
+      await waitFor(() => cdp.eval(`!!document.querySelector('#cascade')`), '连带删除勾选框');
+      ok('删除弹窗有连带删除选项', await cdp.eval(`!!document.querySelector('#cascade')`));
+
+      await cdp.eval(`(() => {
+        const b = document.querySelector('#cascade');
+        b.checked = true;
+        b.dispatchEvent(new Event('change', { bubbles: true }));
+        document.querySelector('.modal [data-yes]').click();
+        return true;
+      })()`);
+      await waitFor(async () => {
+        const d = await (await fetch(`${base}/api/projects`)).json();
+        return !d.some((p) => p.id === created.id);
+      }, '项目删除完成');
+      ok('项目已删除', true);
+      const left = await (await fetch(`${base}/api/storyboards?project_id=${created.id}`)).json();
+      ok('勾选后分镜被级联删除', Array.isArray(left) && left.length === 0, JSON.stringify(left).slice(0, 120));
+    }
+
     const collected = await cdp.eval(`({errors:window.__uiErrors || [], rejects:window.__uiRejects || []})`);
     ok('无 window error', collected?.errors?.length === 0, JSON.stringify(collected?.errors || []));
     ok('无未处理 Promise 拒绝', collected?.rejects?.length === 0, JSON.stringify(collected?.rejects || []));

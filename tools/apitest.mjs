@@ -384,6 +384,45 @@ group('分镜');
   eq('清空第 2 集', del.data.removed, 1);
 }
 
+// ── 7. 边界与参数校验 ───────────────────────────────────────
+// 这一组锁住的是「静默出错」：缺参数清空全库、负数入库、非法 limit 返回空。
+group('边界与校验');
+{
+  // 没有 project_id 就等于「所有项目」，一个漏参请求能把全部分镜删掉
+  const noPid = await api('DELETE', '/api/storyboards', {});
+  eq('清空分镜缺 project_id → 400', noPid.status, 400);
+  const still = await api('GET', `/api/storyboards?project_id=${PROJECT_ID}`);
+  ok('分镜没有被误删', still.data.length > 0, `剩 ${still.data.length} 条`);
+
+  const badEp = await api('GET', `/api/storyboards?project_id=${PROJECT_ID}&episode=abc`);
+  eq('非法集数 → 400', badEp.status, 400);
+
+  const sb = still.data[0];
+  const negDur = await api('PUT', `/api/storyboards/${sb.id}`, { duration_seconds: -30 });
+  eq('负数时长夹到 1 秒', negDur.data.duration_seconds, 1);
+
+  const negEp = await api('PUT', `/api/projects/${PROJECT_ID}`, { planned_episodes: -5 });
+  eq('负数集数夹到 1', negEp.data.planned_episodes, 1);
+
+  const badLimit = await api('GET', '/api/images?limit=abc');
+  eq('非法 limit 不报错', badLimit.status, 200);
+  ok('非法 limit 退回默认而不是空数组', Array.isArray(badLimit.data));
+
+  // 本地音频：TTS 早期只存裸文件名，按 CWD 去 stat 必然失败，
+  // 结果配音明明生成了、系统却认为不存在，整条配音链断掉。
+  const audioDir = path.join(HOME, 'assets', 'audios');
+  fs.mkdirSync(audioDir, { recursive: true });
+  fs.writeFileSync(path.join(audioDir, 'probe.mp3'), 'fake-mp3-bytes');
+  const au = await api('POST', '/api/audio-assets', {
+    name: '相对路径配音', audio_type: 'dialogue', url: '/assets/audios/probe.mp3', local_file: 'probe.mp3',
+  });
+  eq('音频素材创建成功', au.status, 200);
+  const auList = await api('GET', '/api/audio-assets');
+  const probe = auList.data.find((a) => a.name === '相对路径配音');
+  ok('裸文件名的本地配音也判定为可读', !!probe && probe.media_readable === true,
+    JSON.stringify(probe && { local_file: probe.local_file, media_readable: probe.media_readable }));
+}
+
 // ── 7. 图片生成（含落盘） ────────────────────────────────────
 let IMG_ID = '';
 group('图片生成');
@@ -1425,6 +1464,15 @@ group('SSE');
 // ── 16. 清理 ─────────────────────────────────────────────────
 group('级联删除');
 {
+  // 记录删了、文件留下，是最隐蔽的泄漏：素材库看不到，磁盘只涨不降
+  const mediaDir = path.join(HOME, 'assets', 'images');
+  fs.mkdirSync(mediaDir, { recursive: true });
+  const mediaFile = path.join(mediaDir, 'cascade-probe.png');
+  fs.writeFileSync(mediaFile, 'fake-png-bytes');
+  await api('POST', '/api/images', {
+    project_id: PROJECT_ID, name: '级联探针', url: '/assets/images/cascade-probe.png', local_file: mediaFile,
+  });
+
   const r = await fetch(`${BASE}/api/projects/${PROJECT_ID}`, {
     method: 'DELETE',
     headers: { 'Content-Type': 'application/json' },
@@ -1433,6 +1481,8 @@ group('级联删除');
   const d = await r.json();
   eq('删除项目 200', r.status, 200);
   ok('级联删掉了关联数据', d.removed >= 4, `删了 ${d.removed} 条`);
+  ok('级联同时删掉本地媒体文件', Number(d.files_removed) >= 1, `files_removed=${d.files_removed}`);
+  ok('媒体文件确实不在了', !fs.existsSync(mediaFile));
   const left = await api('GET', `/api/storyboards?project_id=${PROJECT_ID}`);
   eq('分镜已清空', left.data.length, 0);
 

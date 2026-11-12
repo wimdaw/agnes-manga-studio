@@ -219,10 +219,13 @@ export default async function tasks(container, params = {}) {
     });
 
     bindOne('shot', (shotId) => {
-      const v = videos.find((x) => x.storyboard_id === shotId);
+      const v = videos.find((x) => x.storyboard_id === shotId && (!projectId || x.project_id === projectId))
+        || videos.find((x) => x.storyboard_id === shotId);
       const targetProject = v?.project_id || projectId;
       if (!targetProject) { toast.warn('这个任务没有可定位的项目'); return; }
-      navigate('storyboards', { project: targetProject, ...(episode ? { episode: String(episode) } : {}), storyboard: shotId });
+      // 不传 episode：跨集任务按本页集数会落错集。
+      // 分镜页拿到 storyboard id 后会反查它属于第几集，并把目标镜头滚进视野。
+      navigate('storyboards', { project: targetProject, storyboard: shotId });
     });
     bindOne('fav', async (id) => {
       // noop anchor keeps action bindings grouped below

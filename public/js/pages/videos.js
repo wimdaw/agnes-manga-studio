@@ -12,7 +12,7 @@ import {
 import { api } from '../api.js';
 import { modal, toast, empty, spinner, confirm, options, prompt as promptDlg, attachAssetMentions } from '../ui.js';
 import { head, projectPicker } from './helpers.js';
-import { state, navigate, resolveProjectId, setActiveProject } from '../app.js';
+import { state, navigate, resolveProjectId, setActiveProject, onEvent } from '../app.js';
 
 export default async function videos(container, params) {
   let projectId = resolveProjectId(params.project || '');
@@ -718,4 +718,21 @@ export default async function videos(container, params) {
   await hydrateIncomingContext();
   renderForm();
   await loadRecent();
+
+  /**
+   * 订阅视频状态：提交完留在本页时，右侧「最近视频任务」也要跟着变。
+   * 之前这页没订阅 SSE，任务明明已经完成，列表还停在「排队中」，
+   * 用户以为卡住就重复提交 —— 而重复提交是要再扣一次额度的。
+   */
+  let recentTimer = null;
+  const offVideo = onEvent('video', (v) => {
+    if (!v || (projectId && v.project_id !== projectId)) return;
+    clearTimeout(recentTimer);
+    recentTimer = setTimeout(() => { loadRecent(); }, 300);
+  });
+
+  return () => {
+    clearTimeout(recentTimer);
+    offVideo?.();
+  };
 }

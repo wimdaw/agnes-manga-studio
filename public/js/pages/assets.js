@@ -92,7 +92,13 @@ export default async function assets(container, params) {
       if (status) {
         if (status === 'local' && !x.local_file) return false;
         else if (status === 'remote' && (x.local_file || !(x.remote_url || x.video_url))) return false;
-        else if (!['local', 'remote'].includes(status) && String(x.status || '').toLowerCase() !== status) return false;
+        else if (!['local', 'remote'].includes(status)) {
+          // 图片/文本素材没有 status 字段（生成成功即入库）。
+          // 之前直接比 x.status，任何状态筛选都会把列表清空，用户以为素材被删了。
+          const st = String(x.status || '').toLowerCase()
+            || ((kind === 'image' || kind === 'text') ? 'completed' : '');
+          if (st !== status) return false;
+        }
       }
       if (query) {
         const hay = kind === 'text'
@@ -238,7 +244,9 @@ export default async function assets(container, params) {
       if (r.ok) { toast.ok('已删除'); load(); } else toast.err(r.error);
     });
     el.querySelectorAll('[data-zoom],[data-id]').forEach((c) => {
-      c.onclick = () => {
+      c.onclick = (e) => {
+        // 放大按钮在卡片内部：不拦住冒泡的话，按钮和卡片各开一个弹窗，叠成两层
+        e.stopPropagation();
         const id = c.getAttribute('data-zoom') || c.getAttribute('data-id');
         const img = images.find((x) => x.id === id);
         if (!img) return;
@@ -311,7 +319,8 @@ export default async function assets(container, params) {
       if (r.ok) { toast.ok('已删除'); load(); } else toast.err(r.error);
     });
     el.querySelectorAll('[data-open],[data-vid]').forEach((c) => {
-      c.onclick = () => {
+      c.onclick = (e) => {
+        e.stopPropagation();
         const id = c.getAttribute('data-open') || c.getAttribute('data-vid');
         const v = videos.find((x) => x.id === id);
         if (!v) return;

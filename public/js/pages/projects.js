@@ -122,21 +122,31 @@ export default async function projects(container, params) {
           } else if (act === 'export') {
             window.open(`/api/projects/${id}/export`, '_blank');
           } else if (act === 'del') {
+            // 复选框状态必须在弹窗关闭前接住：confirm 的确定按钮是「先关 DOM 再 resolve」，
+            // await 回来时 #cascade 已经不在文档里，读到的永远是 null。
+            let cascadeWanted = false;
             const ok = await confirm({
               title: '删除项目',
               text: `确定删除「${esc(list.find((x) => x.id === id)?.name || '')}」吗？<br><br>
-                     <span style="color:var(--text-3)">勾选「连带删除素材」会一并删掉这个项目下的剧本、分镜、图片和视频记录（本地图片文件也会删）。</span>
+                     <span style="color:var(--text-3)">勾选「连带删除素材」会一并删掉这个项目下的剧本、分镜、图片和视频记录（本地媒体文件也会删）。</span>
                      <div style="margin-top:12px"><label class="row" style="gap:8px;font-size:12.5px;color:var(--text-2)">
                        <input type="checkbox" id="cascade" /> 连带删除该项目下的全部数据
                      </label></div>`,
               danger: true,
               okText: '删除',
+              onMount(root) {
+                const box = root.querySelector('#cascade');
+                if (box) box.onchange = () => { cascadeWanted = box.checked; };
+              },
             });
             if (!ok) return;
-            const cascade = document.getElementById('cascade')?.checked;
-            const r3 = await api.deleteProject(id, !!cascade);
-            if (r3.ok) { toast.ok(`已删除${cascade ? `（连带 ${r3.data.removed} 条数据）` : ''}`); load(); softRefresh(); }
-            else toast.err(r3.error);
+            const r3 = await api.deleteProject(id, cascadeWanted);
+            if (r3.ok) {
+              const files = Number(r3.data && r3.data.files_removed) || 0;
+              toast.ok(`已删除${cascadeWanted ? `（连带 ${r3.data.removed} 条数据${files ? `、${files} 个文件` : ''}）` : ''}`);
+              load();
+              softRefresh();
+            } else toast.err(r3.error);
           }
         };
       });
