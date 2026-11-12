@@ -174,6 +174,7 @@ export const TEMPLATE_TYPES = [
   { value: 'episode_outline', label: '分集大纲' },
   { value: 'episode_script', label: '单集脚本' },
   { value: 'storyboard_script', label: '分镜脚本' },
+  { value: 'asset_extract', label: '资产提取' },
   { value: 'image_prompt', label: '图片提示词' },
   { value: 'video_prompt', label: '视频提示词' },
   { value: 'optimize', label: '脚本优化' },

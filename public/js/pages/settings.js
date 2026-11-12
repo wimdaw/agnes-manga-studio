@@ -433,7 +433,7 @@ sk-zzzzzzzz"></textarea>
           脚本页、分镜页的生成与优化按钮都取自这里。用 <span style="font-family:var(--mono)">{{变量}}</span> 占位，页面会自动生成输入框。
         </div>
         <div class="table-wrap"><table class="tbl">
-          <thead><tr><th>名称</th><th style="width:110px">类型</th><th style="width:52px">内置</th><th style="width:110px">操作</th></tr></thead>
+          <thead><tr><th>名称</th><th style="width:110px">类型</th><th style="width:96px">来源</th><th style="width:110px">操作</th></tr></thead>
           <tbody>
             ${templates.map((t) => `
               <tr>
@@ -442,7 +442,9 @@ sk-zzzzzzzz"></textarea>
                   ${t.notes ? `<div style="font-size:11px;color:var(--text-3);margin-top:2px">${esc(t.notes)}</div>` : ''}
                 </td>
                 <td><span class="badge gray">${esc(TEMPLATE_TYPES.find((x) => x.value === t.template_type)?.label || t.template_type)}</span></td>
-                <td>${t.is_builtin ? '<span class="badge gold">内置</span>' : '<span class="badge gray">自定义</span>'}</td>
+                <td>${t.is_builtin
+                  ? (t.is_customized ? '<span class="badge orange">内置·已改</span>' : '<span class="badge gold">内置</span>')
+                  : '<span class="badge gray">自定义</span>'}</td>
                 <td>
                   <div class="row" style="gap:4px">
                     <button class="icon-btn" data-edit="${esc(t.id)}" style="background:rgba(255,255,255,0.07);color:var(--text-2)">${icon('edit', 13)}</button>

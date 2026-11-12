@@ -536,6 +536,40 @@ group('SSE 事件两端一致');
   }
 }
 
+// ── 提示词模板方案：填充器可用，页面确实在消费模板 ──────────────
+group('提示词模板方案');
+{
+  const { fillTemplate, findTemplate, systemOf, variablesOf } =
+    await import(pathToFileURL(path.join(PUB, 'js', 'template.js')).href);
+  const eq = (name, a, b) => ok(name, a === b, `期望 ${JSON.stringify(b)}，实际 ${JSON.stringify(a)}`);
+
+  const tpl = {
+    key: 'demo',
+    template_type: 'image_prompt',
+    system: 'SYS',
+    content: '景别：{{景别}}\n画面：{{画面}}\n重复：{{景别}}',
+    variables: [{ name: '景别' }, { name: '画面' }],
+  };
+  eq('填充已知变量', fillTemplate(tpl, { 景别: '近景', 画面: '雨夜' }), '景别：近景\n画面：雨夜\n重复：近景');
+  eq('未填变量留占位而不是 undefined', fillTemplate(tpl, { 景别: '近景' }).includes('（未填写）'), true);
+  eq('变量为 null 不产生 null 字符串', fillTemplate({ content: '{{x}}' }, { x: null }), '');
+  eq('按 key 找模板优先', findTemplate([tpl, { key: 'other', template_type: 'image_prompt' }], 'image_prompt').key, 'demo');
+  eq('按类型兜底查找', findTemplate([{ key: 'k1', template_type: 'optimize' }], 'optimize').key, 'k1');
+  eq('找不到返回 null', findTemplate([], 'nope'), null);
+  eq('system 兜底', systemOf(null, 'FALLBACK'), 'FALLBACK');
+
+  const sbSrc = read(path.join(PUB, 'js', 'pages', 'storyboards.js'));
+  ok('分镜生成消费 storyboard_script 模板', sbSrc.includes("findTemplate(templates, 'storyboard_script')"));
+  ok('资产提取消费 asset_extract 模板', sbSrc.includes("findTemplate(templates, 'asset_extract')"));
+  ok('批量补图片提示词消费 image_prompt 模板', sbSrc.includes("findTemplate(templates, kind === 'image' ? 'image_prompt' : 'video_prompt')"));
+  ok('分镜页会加载模板列表', /api\.templates\(\)/.test(sbSrc));
+
+  const scriptsSrc = read(path.join(PUB, 'js', 'pages', 'scripts.js'));
+  ok('脚本页统一用 fillTemplate', scriptsSrc.includes('fillTemplate(tpl') && !scriptsSrc.includes('tpl.content || \'\').replace'));
+  const constsSrc = read(path.join(PUB, 'js', 'consts.js'));
+  ok('模板类型含 asset_extract', /value: 'asset_extract'/.test(constsSrc));
+}
+
 console.log(`\n${'═'.repeat(52)}`);
 console.log(`  前端检查：${pass} 通过 / ${fail} 失败`);
 if (failures.length) {

@@ -557,7 +557,15 @@ group('完成后的副作用');
 group('提示词模板');
 {
   const l = await api('GET', '/api/templates');
-  ok('内置模板已注入', l.data.length > 5, `${l.data.length} 条`);
+  ok('内置模板已注入', l.data.length >= 16, `${l.data.length} 条`);
+
+  // 新方案：模板自带变量清单与输出契约，前端据此渲染输入框、测试据此校验字段
+  const builtin = l.data.find((t) => t.key === 'storyboard_script');
+  ok('存在内置分镜模板', !!builtin);
+  ok('内置模板带变量声明', Array.isArray(builtin.variables) && builtin.variables.length > 0);
+  ok('内置模板带输出契约', !!builtin.output_contract && builtin.output_contract.type === 'json_array', JSON.stringify(builtin.output_contract || null));
+  ok('分镜契约含图片提示词字段', (builtin.output_contract.fields || []).includes('image_prompt'));
+  ok('内置模板记录种子版本', !!builtin.seed_version, builtin.seed_version);
 
   const r = await api('POST', '/api/templates', {
     name: '自定义模板', template_type: 'story_concept', content: '写个 {{题材}} 故事', system: '你是编剧',
@@ -565,9 +573,15 @@ group('提示词模板');
   eq('建模板 200', r.status, 200);
   const u = await api('PUT', `/api/templates/${r.data.id}`, { name: '改了名' });
   eq('改模板', u.data.name, '改了名');
+  ok('用户自建模板不会被标记为已改内置', !u.data.is_customized, JSON.stringify(u.data.is_customized));
+
+  // 内置模板被改过要留痕，否则下次升级提示词库会把用户的修改覆盖掉
+  const eb = await api('PUT', `/api/templates/${builtin.id}`, { notes: '临时改个备注' });
+  eq('改内置模板打上 is_customized', eb.data.is_customized, true);
 
   const f = await api('GET', '/api/templates?template_type=optimize');
   ok('按类型过滤', f.data.every((t) => t.template_type === 'optimize'));
+  ok('优化模板不少于 6 条', f.data.length >= 6, `${f.data.length} 条`);
 
   await api('DELETE', `/api/templates/${r.data.id}`);
   eq('删模板后查不到', (await api('GET', `/api/templates`)).data.find((t) => t.id === r.data.id), undefined);

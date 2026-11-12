@@ -8,6 +8,7 @@ import { api } from '../api.js';
 import { modal, toast, empty, spinner, options, confirm } from '../ui.js';
 import { head, projectPicker } from './helpers.js';
 import { state, softRefresh, resolveProjectId, setActiveProject, hasAgnesKey } from '../app.js';
+import { fillTemplate, systemOf } from '../template.js';
 
 const TAB_TPL = {
   story_concept: 'story_concept',
@@ -158,9 +159,7 @@ export default async function scripts(container, params) {
       toast.err('还没配置 Agnes API Key，请到「设置 → 密钥池」添加。');
       return;
     }
-    let prompt = tpl.content || '';
-    for (const [k, v] of fields) prompt = prompt.split(`{{${k}}}`).join(v || '');
-    prompt = prompt.replace(/\{\{[^}]+\}\}/g, '（未填写）');
+    const prompt = fillTemplate(tpl, Object.fromEntries(fields));
 
     generating = true;
     const st = container.querySelector('#gen-status');
@@ -169,7 +168,7 @@ export default async function scripts(container, params) {
 
     const r = await api.genText({
       messages: [
-        { role: 'system', content: tpl.system || '你是专业的AI短视频漫剧编剧。请用中文回答。' },
+        { role: 'system', content: systemOf(tpl, '你是专业的AI短视频漫剧编剧。请用中文回答。') },
         { role: 'user', content: prompt },
       ],
       model: container.querySelector('#model').value,
@@ -259,10 +258,10 @@ export default async function scripts(container, params) {
     if (!tpl || !result) return;
     const st = container.querySelector('#gen-status');
     st.innerHTML = `<div class="row" style="margin-top:12px;color:var(--gold-light)"><div class="spinner sm"></div><span style="font-size:12.5px">正在${esc(tpl.name)}…</span></div>`;
-    const prompt = (tpl.content || '').replace(/\{\{[^}]+\}\}/g, result);
+    const prompt = fillTemplate(tpl, { 脚本内容: result });
     const r = await api.genText({
       messages: [
-        { role: 'system', content: tpl.system || '你是专业的AI短视频漫剧编剧。' },
+        { role: 'system', content: systemOf(tpl, '你是专业的AI短视频漫剧编剧。') },
         { role: 'user', content: prompt },
       ],
       model: container.querySelector('#model')?.value,

@@ -484,6 +484,33 @@ group('内置模板');
   ok('含故事构思模板', store.list('prompt_templates').some((t) => t.template_type === 'story_concept'));
   ok('含脚本优化模板', store.list('prompt_templates').some((t) => t.template_type === 'optimize'));
   ok('模板带变量占位', store.list('prompt_templates').some((t) => /\{\{.+\}\}/.test(t.content)));
+
+  // 新方案的硬要求：自洽、可校验、字段对得上数据库
+  eq('模板库自洽校验无错误', seed.checkTemplates().length, 0);
+  eq('内置模板数量与目录一致', store.list('prompt_templates').filter((t) => t.is_builtin).length, seed.DEFAULT_TEMPLATES.length);
+  ok('每条模板都带 stage/order/version', seed.DEFAULT_TEMPLATES.every((t) => t.stage && Number.isFinite(t.order) && Number.isFinite(t.version)));
+  ok('每条模板都声明了变量', seed.DEFAULT_TEMPLATES.every((t) => Array.isArray(t.variables) && t.variables.length > 0));
+  const sbTpl = seed.DEFAULT_TEMPLATES.find((t) => t.key === 'storyboard_script');
+  for (const f of ['shot_number', 'scene_description', 'image_prompt', 'video_prompt', 'negative_prompt']) {
+    ok(`分镜契约含 ${f}`, sbTpl.output_contract.fields.includes(f));
+  }
+  eq('内置模板标记了种子版本', store.list('prompt_templates')[0].seed_version, seed.PROMPT_VERSION);
+
+  // 升级：未改过的内置模板跟随版本，改过的 / 自建的一律不动
+  const builtin = store.list('prompt_templates').find((t) => t.key === 'story_concept');
+  store.update('prompt_templates', builtin.id, { content: 'OLD-BUILTIN', seed_version: '1.0.0' });
+  const edited = store.list('prompt_templates').find((t) => t.key === 'plot_summary');
+  store.update('prompt_templates', edited.id, { content: 'MY-EDIT', is_customized: true });
+  const own = store.insert('prompt_templates', { key: 'my_own_tpl', name: '我的模板', template_type: 'story_concept', content: 'OWN', is_builtin: false });
+  store.setSettings({ prompt_seed_version: '1.0.0' });
+
+  const up = seed.seedTemplatesDetailed(store);
+  ok('升级写入了模板', up.updated >= 1, JSON.stringify({ updated: up.updated }));
+  const afterBuiltin = store.list('prompt_templates').find((t) => t.id === builtin.id);
+  ok('未改过的内置模板被升级', afterBuiltin.content !== 'OLD-BUILTIN' && afterBuiltin.seed_version === seed.PROMPT_VERSION);
+  eq('用户改过的内置模板不被覆盖', store.list('prompt_templates').find((t) => t.id === edited.id).content, 'MY-EDIT');
+  eq('用户自建模板不被覆盖', store.list('prompt_templates').find((t) => t.id === own.id).content, 'OWN');
+  eq('同版本再次播种是幂等的', seed.seedTemplatesDetailed(store).updated, 0);
 }
 
 // ── 9. 文件落盘安全 ──────────────────────────────────────────

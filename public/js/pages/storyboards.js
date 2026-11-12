@@ -9,6 +9,7 @@ import {
 } from '../consts.js';
 import { api } from '../api.js';
 import { modal, toast, empty, spinner, confirm, options, attachAssetMentions } from '../ui.js';
+import { fillTemplate, findTemplate, systemOf } from '../template.js';
 import { head, projectPicker, renderBatchBar, episodeOptions } from './helpers.js';
 import { state, onEvent, navigate, resolveProjectId, setActiveProject } from '../app.js';
 import { episodeWorkflowState, shotWorkflowState } from '../workflow-state.js';
@@ -26,6 +27,7 @@ export default async function storyboards(container, params) {
   let audioAssets = [];
   let generationTasks = [];
   let projectVideos = [];
+  let templates = [];
   async function restoreBatchJob() {
     const r = await api.batches();
     if (!r.ok || !Array.isArray(r.data)) return;
@@ -184,7 +186,7 @@ export default async function storyboards(container, params) {
       }
     }
 
-    const [r, imgs, allImgs, entities, audios, tasks, videos, scripts, plans] = await Promise.all([api.storyboards(projectId, episode), api.images(projectId), api.images(), api.assetEntities(projectId), api.audioAssets(projectId), api.tasks(), api.videos(projectId), api.scripts(projectId), api.editPlans(projectId, episode)]);
+    const [r, imgs, allImgs, entities, audios, tasks, videos, scripts, plans, tpls] = await Promise.all([api.storyboards(projectId, episode), api.images(projectId), api.images(), api.assetEntities(projectId), api.audioAssets(projectId), api.tasks(), api.videos(projectId), api.scripts(projectId), api.editPlans(projectId, episode), api.templates()]);
     // 这 9 个请求可能跑几百毫秒，期间用户可能已经切了项目或集数。
     // 不校验令牌的话，旧响应会把新项目的表格、图片映射全部覆盖掉。
     if (seq !== loadSeq) return;
@@ -197,6 +199,7 @@ export default async function storyboards(container, params) {
     projectVideos = (videos.ok && videos.data) || [];
     savedScripts = (scripts.ok && scripts.data) || [];
     editPlans = (plans.ok && plans.data) || [];
+    templates = (tpls.ok && tpls.data) || [];
     const scriptSelect = container.querySelector('#saved-script');
     const currentScript = scriptSelect.value;
     scriptSelect.innerHTML = '<option value="">选择项目已保存脚本…</option>' + savedScripts.map((s) => '<option value="' + esc(s.id) + '">' + esc(s.title || s.script_type || '未命名脚本') + '</option>').join('');
@@ -353,10 +356,13 @@ export default async function storyboards(container, params) {
   }
 
   async function extractAssetsFromScript(text) {
+    // 资产提取也走模板：改名、改锚点规则都在设置页，不用改代码
+    const tpl = findTemplate(templates, 'asset_extract');
+    const fallback = '从以下剧本提取角色、场景、道具。每项包含 asset_type(character/scene/prop)、name、description、prompt。name必须使用剧本中的简洁中文名称；description写固定身份/外观/环境/道具特征；prompt写适合图像生成的一致性提示词。\n\n';
     const r = await api.genText({
       messages: [
-        { role: 'system', content: '你是AI漫剧资产设定师。只返回JSON数组，不要解释。提取需要跨镜头保持一致的角色、场景、道具。' },
-        { role: 'user', content: '从以下剧本提取角色、场景、道具。每项包含 asset_type(character/scene/prop)、name、description、prompt。name必须使用剧本中的简洁中文名称；description写固定身份/外观/环境/道具特征；prompt写适合图像生成的一致性提示词。\n\n' + text },
+        { role: 'system', content: systemOf(tpl, '你是AI漫剧资产设定师。只返回JSON数组，不要解释。提取需要跨镜头保持一致的角色、场景、道具。') },
+        { role: 'user', content: tpl ? fillTemplate(tpl, { 脚本内容: text, 已有资产: assetListText() }) : fallback + text },
       ],
       project_id: projectId,
       note: '剧本资产提取',
@@ -375,6 +381,16 @@ export default async function storyboards(container, params) {
     }
     if (created.length) entityAssets = entityAssets.concat(created);
     return { ok: true, created: created.length };
+  }
+
+  function projectMeta() {
+    return state.projects.find((p) => p.id === projectId) || {};
+  }
+
+  /** 资产清单：给模板的 {{资产清单}} 变量 */
+  function assetListText() {
+    if (!entityAssets.length) return '（暂无固定资产，不要编造 @名称）';
+    return entityAssets.map((a) => `@${a.name} [${a.asset_type}]：${a.description || a.prompt || ''}`).join('\n');
   }
 
   function assetGuide() {
@@ -422,15 +438,29 @@ export default async function storyboards(container, params) {
     const assetResult = await extractAssetsFromScript(text);
     if (!assetResult.ok) toast.warn('资产自动提取未完成，将继续生成分镜：' + assetResult.error);
     else if (assetResult.created) toast.info('已从剧本新增 ' + assetResult.created + ' 个角色/场景/道具资产');
-    const r = await api.genText({
-      messages: [
-        { role: 'system', content: '你是专业的AI漫剧分镜导演。请用JSON数组格式返回分镜表，每个镜头必须包含所有字段，英文图片/视频提示词要专业、详细。' },
-        {
-          role: 'user',
-          content: `请将以下脚本内容转换为分镜表，JSON数组格式，每个镜头包含：
+    // 分镜表提示词走模板（设置 → 提示词模板 → 分镜脚本），
+    // 以前这里是硬编码的，用户在设置里改模板对这里完全不生效。
+    const tpl = findTemplate(templates, 'storyboard_script');
+    const meta = projectMeta();
+    const fallbackUser = `请将以下脚本内容转换为分镜表，JSON数组格式，每个镜头包含：
 shot_number(数字)、shot_type(景别)、scene_description(画面描述)、characters(出场人物)、action(动作)、dialogue(台词)、narration(旁白)、sound_effect(音效)、duration_seconds(时长数字)、image_prompt(英文图片提示词)、video_prompt(英文视频提示词)、negative_prompt(英文负面提示词)。
 
-${text}${assetGuide()}`,
+${text}${assetGuide()}`;
+    const r = await api.genText({
+      messages: [
+        { role: 'system', content: systemOf(tpl, '你是专业的AI漫剧分镜导演。请用JSON数组格式返回分镜表，每个镜头必须包含所有字段，英文图片/视频提示词要专业、详细。') },
+        {
+          role: 'user',
+          content: tpl
+            ? fillTemplate(tpl, {
+              脚本内容: text,
+              集数: episode,
+              单集时长: meta.episode_duration || '90秒',
+              画风: meta.art_style || '三渲二国风',
+              目标平台: meta.target_platform || '抖音',
+              资产清单: assetListText(),
+            })
+            : fallbackUser,
         },
       ],
       project_id: projectId,
@@ -478,14 +508,40 @@ ${text}${assetGuide()}`,
     let failed = 0;
     for (const s of targets) {
       bar.innerHTML = `<div class="note gold"><div class="row"><div class="spinner sm"></div><span>${kind === 'image' ? '生成图片提示词' : '生成视频提示词'}：${done + failed + 1} / ${targets.length}</span></div></div>`;
-      const sys = kind === 'image'
+      // 补提示词也走模板：单镜和整表用同一套写法，风格才不会打架
+      const tpl = findTemplate(templates, kind === 'image' ? 'image_prompt' : 'video_prompt');
+      const meta = projectMeta();
+      const refs = assetGuide();
+      const sysFallback = kind === 'image'
         ? '你是专业的AI漫剧分镜图提示词工程师，请生成适合图像生成的英文提示词，风格统一，细节丰富。只输出提示词，不要解释。'
         : '你是专业的AI视频提示词工程师。请用英文输出，只描述画面运动与镜头运动，不要重复静态外观。';
-      const refs = assetGuide();
-      const user = kind === 'image'
+      const userFallback = kind === 'image'
         ? `为以下分镜生成英文图片提示词：景别:${s.shot_type}，画面:${s.scene_description}，人物:${s.characters}，场景:${s.scene}，动作:${s.action}${refs}\n必须保留本镜头涉及的 @资产名。`
         : `为以下分镜生成英文视频运动提示词：画面:${s.scene_description}，人物:${s.characters}，场景:${s.scene}，动作:${s.action}，台词:${s.dialogue}${refs}\n必须保留本镜头涉及的 @资产名。`;
-      const r = await api.genText({ messages: [{ role: 'system', content: sys }, { role: 'user', content: user }], project_id: projectId });
+      const r = await api.genText({
+        messages: [
+          { role: 'system', content: systemOf(tpl, sysFallback) },
+          {
+            role: 'user',
+            content: tpl
+              ? fillTemplate(tpl, {
+                景别: s.shot_type || '',
+                画面描述: s.scene_description || '',
+                人物: s.characters || '',
+                场景: s.scene || '',
+                动作: s.action || '',
+                台词: s.dialogue || '',
+                情绪: s.emotion_goal || '',
+                镜头运动: 'push in',
+                时长: s.duration_seconds || 3,
+                画风: meta.art_style || '三渲二国风',
+                资产清单: assetListText(),
+              })
+              : userFallback,
+          },
+        ],
+        project_id: projectId,
+      });
       if (r.ok) {
         const txt = (r.data.content || '').trim().replace(/^["']|["']$/g, '');
         const normalized = normalizeAssetRefs({ ...s, [kind === 'image' ? 'image_prompt' : 'video_prompt']: txt });
