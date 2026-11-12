@@ -20,6 +20,7 @@ const jobs = require('./lib/jobs.js');
 const seed = require('./lib/seed.js');
 const createRoutes = require('./lib/routes.js');
 const imagehost = require('./lib/imagehost.js');
+const keys = require('./lib/keys.js');
 
 let pass = 0;
 let fail = 0;
@@ -564,6 +565,101 @@ group('数据损坏恢复');
 
   wipe();
   store.init(HOME);   // 收尾前把 store 指回原目录
+}
+
+// ── 11. 密钥池（轮换 / 限流 / 冷却 / 脱敏 / 迁移） ────────────
+group('密钥池');
+{
+  const K = path.join(os.tmpdir(), `agnes-keytest-${process.pid}`);
+  fs.rmSync(K, { recursive: true, force: true });
+  store.init(K);
+  keys._resetForTest(K);
+  store.setSettings({ agnes_api_key: 'sk-legacy-0000000000' });
+
+  const initRes = keys.init(K);
+  ok('首次初始化迁移旧单 Key', initRes.migrated === true);
+  eq('迁移后池子里 1 把', keys.summary().total, 1);
+  eq('迁移后旧字段清空（避免两处不一致）', store.getRawKey(), '');
+  ok('迁移结果写进 keys.json', fs.existsSync(path.join(K, 'keys.json')));
+
+  eq('清洗掉 Bearer 前缀', keys.cleanKey('Bearer sk-abc12345'), 'sk-abc12345');
+  eq('清洗掉引号和逗号', keys.cleanKey('"sk-abc12345",'), 'sk-abc12345');
+  eq('清洗后仍保留主体', keys.cleanKey('  sk-abc12345  '), 'sk-abc12345');
+
+  const many = keys.addMany(`主号,sk-main-11111111
+备用 sk-back-22222222
+sk-third-33333333
+sk-main-11111111
+短`);
+  eq('批量导入 3 把', many.added.length, 3);
+  eq('重复和非法行被跳过', many.skipped.length, 2);
+  ok('跳过原因可读', /已经在密钥池/.test(many.skipped[0].reason), JSON.stringify(many.skipped));
+  eq('逗号写法的备注解析正确', keys.list().find((k) => k.masked.endsWith('1111')).label, '主号');
+  eq('空格写法的备注解析正确', keys.list().find((k) => k.masked.endsWith('2222')).label, '备用');
+  eq('池子里共 4 把', keys.summary().total, 4);
+
+  const dumped = JSON.stringify(keys.list());
+  ok('列表接口不含明文 Key', !dumped.includes('sk-main-11111111'), dumped.slice(0, 150));
+  ok('掩码保留尾号便于辨认', /\*+1111$/.test(keys.list().find((k) => k.label === '主号').masked));
+
+  // 顺序轮换：连续取 4 次应该把 4 把都用到
+  const ids = [];
+  for (let i = 0; i < 4; i++) { const p = keys.pick(); ids.push(p && p.id); }
+  eq('顺序轮换 4 次覆盖 4 把', new Set(ids).size, 4);
+  ok('取到的都是明文 Key', ids.every(Boolean));
+
+  // 指定 least_used 时，优先用统计数为 0 的
+  store.setSettings({ key_rotation_mode: 'least_used' });
+  keys.report(ids[0], { ok: true });
+  const least = keys.pick();
+  ok('least_used 避开刚用过的 Key', least && least.id !== ids[0], JSON.stringify(least && least.id));
+  store.setSettings({ key_rotation_mode: 'round_robin' });
+
+  // 单一 Key 的限流与冷却
+  for (const k of keys.list()) keys.remove(k.id);
+  const added = keys.add({ label: '限流测试', key: 'sk-limit-99999999', rpm: 2 });
+  ok('添加单把 Key', added.ok && added.key.masked.endsWith('9999'));
+  ok('第 1 次可取', !!keys.pick());
+  ok('第 2 次可取', !!keys.pick());
+  eq('达到 RPM 后取不到', keys.pick(), null);
+  const info = keys.exhaustedInfo();
+  eq('限流时错误类型明确', info.errorType, 'keys_exhausted');
+  ok('限流时给出恢复等待时间', info.retryAfterMs > 0 && info.retryAfterMs <= 60000, String(info.retryAfterMs));
+
+  keys.report(added.key.id, { ok: false, fault: true, status: 429, message: '429 too many requests' });
+  eq('429 后进入冷却', keys.list()[0].status, 'cooling');
+  ok('冷却倒计时可读', keys.list()[0].cooldown_left_seconds > 0);
+  keys.revive(added.key.id);
+  eq('恢复后重新可用', keys.list()[0].status, 'active');
+
+  for (let i = 0; i < 3; i++) {
+    keys.report(added.key.id, { ok: false, fault: true, status: 401, message: 'invalid api key' });
+  }
+  eq('连续 401 自动停用', keys.list()[0].status, 'disabled');
+  ok('带上自动停用标记', keys.list()[0].auto_disabled === true);
+  keys.revive(added.key.id);
+  eq('手动恢复后 active', keys.list()[0].status, 'active');
+
+  keys.remove(added.key.id);
+  eq('删除后池子清空', keys.summary().total, 0);
+
+  // 池子空 → 回退旧单 Key（老配置不改也能跑）
+  store.setSettings({ agnes_api_key: 'sk-legacy-fallback' });
+  const fb = keys.pick();
+  ok('池空时回退旧单 Key', !!(fb && fb.legacy), JSON.stringify(fb));
+  eq('有兜底 Key 时 hasAny 为 true', keys.hasAny(), true);
+
+  store.clearSetting('agnes_api_key');
+  eq('彻底没有 Key 时 hasAny 为 false', keys.hasAny(), false);
+  eq('无 Key 的错误类型是 no_api_key', keys.exhaustedInfo().errorType, 'no_api_key');
+
+  // 全停用时要说清楚是「停用」而不是「没配」
+  keys.add({ label: '停用测试', key: 'sk-off-77777777' });
+  keys.update(keys.list()[0].id, { enabled: false });
+  eq('全停用的错误类型', keys.exhaustedInfo().errorType, 'keys_disabled');
+
+  keys._resetForTest();
+  store.init(HOME);
 }
 
 // ── 收尾 ─────────────────────────────────────────────────────

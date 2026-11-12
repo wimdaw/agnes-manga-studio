@@ -6,10 +6,10 @@ import { icon, esc, relTime, fmtTime, projectStatusBadge } from '../consts.js';
 import { api } from '../api.js';
 import { empty, spinner, toast } from '../ui.js';
 import { head } from './helpers.js';
-import { state, navigate, refreshState } from '../app.js';
+import { state, navigate, refreshState, hasAgnesKey } from '../app.js';
 
 export default async function dashboard(container) {
-  const needsKey = !state.settings.agnes_api_key;
+  const needsKey = !hasAgnesKey();
   container.innerHTML = `
     ${head({
       title: '工作台',
@@ -77,7 +77,7 @@ export default async function dashboard(container) {
 
     if (state.bootstrapError) {
       alert = `<div class="note red"><span>${icon('alert', 14)}无法加载本机工作台数据：${esc(state.bootstrapError)}</span><button class="btn btn-xs" id="retry-bootstrap">重试</button></div>`;
-    } else if (!state.settings.agnes_api_key) {
+    } else if (!hasAgnesKey()) {
       alert = `<div class="note orange"><span>${icon('key', 14)}还没有配置 Agnes API Key。先完成配置，之后才能生成脚本、图片和视频。</span><button class="btn btn-primary btn-xs" id="onboarding-next">配置 API Key</button></div>`;
       next = () => navigate('settings');
     } else if (!projects.length) {

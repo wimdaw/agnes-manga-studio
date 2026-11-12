@@ -235,6 +235,59 @@ group('设置');
   eq('模型目录保留新文本模型', ml.data.models.find((m) => m.id === 'agnes-text-new').kind, 'text');
 }
 
+// ── 2b. 密钥池 ───────────────────────────────────────────────
+group('密钥池接口');
+{
+  const before = await api('GET', '/api/keys');
+  eq('密钥池可读', before.status, 200);
+  ok('返回 Key 列表', Array.isArray(before.data.keys));
+  ok('返回轮换策略', !!before.data.policy && typeof before.data.policy.mode === 'string');
+
+  const st = await api('GET', '/api/settings');
+  ok('设置里带密钥池概况', typeof st.data.key_pool.total === 'number', JSON.stringify(st.data.key_pool));
+
+  const add = await api('POST', '/api/keys', {
+    text: `接口测试,sk-mock-key-1234567890\nsk-mock-second-999\nsk-mock-second-999\n短`,
+  });
+  eq('批量添加 200', add.status, 200);
+  eq('加到 2 把', add.data.added.length, 2);
+  eq('重复与非法行都被跳过', add.data.skipped.length, 2);
+  ok('重复 Key 会被指出来', /已经在密钥池/.test(add.data.skipped[0].reason), JSON.stringify(add.data.skipped));
+
+  const list = await api('GET', '/api/keys');
+  eq('列表 2 把', list.data.keys.length, 2);
+  eq('概况同步更新', list.data.summary.total, 2);
+  ok('接口不返回明文', !JSON.stringify(list.data).includes('sk-mock-key-1234567890'));
+  ok('掩码保留尾号', /\*+7890$/.test(list.data.keys.find((k) => k.label === '接口测试').masked),
+    JSON.stringify(list.data.keys.map((k) => k.masked)));
+
+  const KEY_ID = list.data.keys.find((k) => k.label === '接口测试').id;
+  const off = await api('PUT', `/api/keys/${KEY_ID}`, { enabled: false });
+  eq('停用 200', off.status, 200);
+  eq('停用后状态正确', off.data.key.status, 'disabled');
+  eq('停用后可用数减少', off.data.summary.active, 1);
+
+  const rv = await api('POST', `/api/keys/${KEY_ID}/revive`, {});
+  eq('恢复 200', rv.status, 200);
+  eq('恢复后可用', rv.data.key.status, 'active');
+
+  // 单把 Key 测试：走 mock 的文本接口，顺带验证「只测这一把」的路径
+  const tk = await api('POST', `/api/keys/${KEY_ID}/test`, { kind: 'text' });
+  eq('单 Key 测试成功', tk.data.ok, true);
+  ok('测试后有成功计数', tk.data.keys.find((k) => k.id === KEY_ID).stats.ok >= 1);
+
+  const del = await api('DELETE', `/api/keys/${KEY_ID}`, {});
+  eq('删除 200', del.status, 200);
+  eq('删到 1 把', del.data.summary.total, 1);
+  const otherId = list.data.keys.find((k) => k.id !== KEY_ID).id;
+  const del2 = await api('DELETE', `/api/keys/${otherId}`, {});
+  eq('再删一把归零', del2.data.summary.total, 0);
+
+  const back = await api('GET', '/api/settings');
+  eq('清空后统计归零', back.data.key_pool.total, 0);
+  eq('清空后回退旧单 Key', back.data.key_pool.legacy, true);
+}
+
 // ── 3. 项目 ──────────────────────────────────────────────────
 let PROJECT_ID = '';
 group('项目');

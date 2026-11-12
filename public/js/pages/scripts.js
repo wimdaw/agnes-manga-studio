@@ -7,7 +7,7 @@ import { icon, esc, relTime, extractJson, copyText, SCRIPT_TYPES, modelChoices }
 import { api } from '../api.js';
 import { modal, toast, empty, spinner, options, confirm } from '../ui.js';
 import { head, projectPicker } from './helpers.js';
-import { state, softRefresh, resolveProjectId, setActiveProject } from '../app.js';
+import { state, softRefresh, resolveProjectId, setActiveProject, hasAgnesKey } from '../app.js';
 
 const TAB_TPL = {
   story_concept: 'story_concept',
@@ -154,8 +154,8 @@ export default async function scripts(container, params) {
   async function generate() {
     const tpl = tplOf(TAB_TPL[tab]);
     if (!tpl) return;
-    if (!state.settings.agnes_api_key) {
-      toast.err('还没配置 Agnes API Key，请到「设置」页填写。');
+    if (!hasAgnesKey()) {
+      toast.err('还没配置 Agnes API Key，请到「设置 → 密钥池」添加。');
       return;
     }
     let prompt = tpl.content || '';

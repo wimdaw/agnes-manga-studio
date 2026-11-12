@@ -43,6 +43,18 @@ export const state = {
   activeProjectId: '',
 };
 
+/**
+ * 有没有配过 Agnes Key。
+ * 多 Key 之后密钥在密钥池里，settings.agnes_api_key 通常是空的 ——
+ * 只看老字段会让配好一堆 Key 的用户仍然被提示「还没配置」。
+ */
+export function hasAgnesKey() {
+  const s = state.settings || {};
+  if (s.agnes_api_key) return true;
+  const pool = s.key_pool || {};
+  return Number(pool.total) > 0;
+}
+
 let cleanup = null;
 
 const ACTIVE_PROJECT_KEY = 'agnes-studio.active-project';

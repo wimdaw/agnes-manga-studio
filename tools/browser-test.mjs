@@ -191,6 +191,8 @@ try {
       return d.some((p) => p.name === '浏览器验收剧');
     }, '项目落盘');
     ok('创建项目后接口可读回', true);
+    // 弹窗有关闭动画：接口先返回、DOM 后移除，直接断言会偶发失败
+    await waitFor(() => cdp.eval(`!document.querySelector('.modal')`), '弹窗关闭');
     ok('创建后弹窗关闭', await cdp.eval(`!document.querySelector('.modal')`));
 
     group('设置页');
@@ -205,6 +207,26 @@ try {
     await waitFor(() => cdp.eval(`!!document.querySelector('#refresh-models')`), '模型设置');
     ok('动态模型面板可打开', await cdp.eval(`!!document.querySelector('#refresh-models') && !!document.querySelector('#m-ttl')`));
     ok('模型默认项可选', await cdp.eval(`document.querySelector('#m-text')?.options.length > 0 && document.querySelector('#m-image')?.options.length > 0 && document.querySelector('#m-video')?.options.length > 0`));
+
+    group('设置页 · 密钥池');
+    await cdp.eval(`document.querySelector('[data-sec="keys"]')?.click(); return true;`);
+    await waitFor(() => cdp.eval(`!!document.querySelector('#keys-body') && !document.querySelector('#keys-body').textContent.includes('加载中')`), '密钥池面板');
+    ok('密钥池面板可打开', await cdp.eval(`!!document.querySelector('#k-add') && !!document.querySelector('#save-key-policy')`));
+    ok('空态有说明', await cdp.eval(`document.querySelector('#keys-body')?.innerText.includes('还没有添加 Key')`));
+
+    await cdp.eval(`document.querySelector('#k-new-text').value = '验收,sk-browser-test-123456'; return true;`);
+    await cdp.eval(`document.querySelector('#k-add')?.click(); return true;`);
+    await waitFor(() => cdp.eval(`document.querySelectorAll('#keys-body tbody tr').length === 1`), '密钥列表');
+    ok('添加后列表出现 1 行', await cdp.eval(`document.querySelectorAll('#keys-body tbody tr').length === 1`));
+    ok('界面只显示掩码', await cdp.eval(`document.querySelector('#keys-body').innerText.includes('****') && !document.querySelector('#keys-body').innerText.includes('sk-browser-test-123456')`));
+    ok('新 Key 状态为可用', await cdp.eval(`document.querySelector('#keys-body').innerText.includes('可用')`));
+
+    await cdp.eval(`document.querySelector('[data-del-key]')?.click(); return true;`);
+    await waitFor(() => cdp.eval(`!!document.querySelector('.modal')`), '删除确认弹窗');
+    ok('删除前有确认弹窗', await cdp.eval(`!!document.querySelector('.modal')`));
+    await cdp.eval(`document.querySelector('.modal [data-yes]')?.click(); return true;`);
+    await waitFor(() => cdp.eval(`document.querySelectorAll('#keys-body tbody tr').length === 0`), '密钥删除');
+    ok('删除后列表清空', await cdp.eval(`document.querySelector('#keys-body').innerText.includes('还没有添加 Key')`));
 
     group('视频生成页：音频生视频模式');
     await cdp.eval(`location.hash = '#/videos'`);

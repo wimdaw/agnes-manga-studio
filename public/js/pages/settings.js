@@ -10,6 +10,7 @@ import { state, refreshState } from '../app.js';
 
 const SECTIONS = [
   { id: 'api', label: 'Agnes API', icon: 'key' },
+  { id: 'keys', label: '密钥池', icon: 'key' },
   { id: 'model', label: '模型配置', icon: 'cpu' },
   { id: 'host', label: '图床', icon: 'cloud' },
   { id: 'tts', label: '配音服务', icon: 'play' },
@@ -24,8 +25,7 @@ export default async function settings(container, params = {}) {
   let section = validSections.has(params.section) ? params.section : 'api';
   let settings = {};
   let templates = [];
-  let keyVisible = false;
-  let draftKey = '';
+  let keyData = null;
 
   container.innerHTML = `
     ${head({ title: '设置', desc: 'API Key 只写进本机配置文件，不会上传到任何地方' })}
@@ -69,7 +69,7 @@ export default async function settings(container, params = {}) {
     });
     const p = container.querySelector('#panel');
     p.innerHTML = ({
-      api: renderApi, model: renderModel, host: renderHost, tts: renderTts, task: renderTask,
+      api: renderApi, keys: renderKeys, model: renderModel, host: renderHost, tts: renderTts, task: renderTask,
       templates: renderTemplates, data: renderData, about: renderAbout,
     })[section]();
     bindPanel(p);
@@ -82,6 +82,7 @@ export default async function settings(container, params = {}) {
   // ── API ───────────────────────────────────────────────────
   function renderApi() {
     const has = !!settings.agnes_api_key;
+    const pool = settings.key_pool || { total: 0, active: 0, cooling: 0, rate_limited: 0, disabled: 0 };
     return `
       <div class="card">
         <div class="card-title">${icon('key', 15)}Agnes API 配置</div>
@@ -91,17 +92,19 @@ export default async function settings(container, params = {}) {
           <div class="hint">文本走 /v1/chat/completions，图片走 /v1/images/generations，视频创建走 /v1/videos，查询走 /agnesapi。</div>
         </div>
         <div class="field">
-          <label>Agnes API Key</label>
-          <div class="row">
-            <input class="input mono" id="s-key" type="${keyVisible ? 'text' : 'password'}"
-              value="${esc(keyVisible ? draftKey : (settings.agnes_api_key_masked || ''))}"
-              placeholder="${has ? '已配置，留空表示不修改' : 'sk-…'}" ${keyVisible ? '' : 'disabled'} />
-            <button class="btn btn-icon" id="toggle-key" title="显示/编辑">${icon(keyVisible ? 'eye' : 'edit', 15)}</button>
+          <label>API Key</label>
+          <div class="note ${pool.total ? 'green' : 'orange'}" style="margin:0">
+            ${pool.total
+              ? `${icon('key', 13)} 密钥池 ${pool.total} 把：可用 ${pool.active} · 冷却 ${pool.cooling} · 限流 ${pool.rate_limited} · 停用 ${pool.disabled}`
+              : (has
+                ? `${icon('key', 13)} 正在用旧版单 Key（${esc(settings.agnes_api_key_masked || '')}），只能单线程跑，容易被限流。`
+                : `${icon('alert', 13)} 还没有可用 Key，无法生成内容。`)}
           </div>
-          <div class="hint">${has ? `当前：${esc(settings.agnes_api_key_masked || '***')}。点右侧按钮可重新填写。` : '还没有配置 Key，填了才能生成内容。'}</div>
+          <div class="hint">Key 由「密钥池」统一管理：多把自动轮换，某把被限流或失效会自动换下一把，不用手动切。</div>
         </div>
         <div class="row wrap">
-          <button class="btn btn-primary" id="save-api">${icon('save', 14)}保存配置</button>
+          <button class="btn btn-primary" id="save-api">${icon('save', 14)}保存 Base URL</button>
+          <button class="btn btn-sm" id="goto-keys">${icon('key', 13)}管理密钥池</button>
           <button class="btn btn-sm" id="refresh-models-api">${icon('refresh', 13)}拉取模型目录</button>
           <div class="spacer"></div>
           <button class="btn btn-sm" data-test="text">${icon('zap', 13)}测试文本</button>
@@ -111,12 +114,199 @@ export default async function settings(container, params = {}) {
         <div id="test-out" style="margin-top:12px"></div>
       </div>
       <div class="note gold" style="margin-top:16px">
-        ${icon('shield', 14)} Key 保存在本机 <span style="font-family:var(--mono)">settings.json</span>，
-        前端永远拿不到明文 —— 所有 Agnes 请求都由本地服务代发。
+        ${icon('shield', 14)} Key 保存在本机 <span style="font-family:var(--mono)">keys.json</span>，
+        前端永远拿不到明文 —— 所有 Agnes 请求都由本地服务代发，也不会跟着项目备份导出。
       </div>`;
   }
 
-  // ── 模型 ──────────────────────────────────────────────────
+  // ── 密钥池 ────────────────────────────────────────────────
+  function keyStatusBadge(k) {
+    if (k.status === 'active') return '<span class="badge green">可用</span>';
+    if (k.status === 'cooling') return `<span class="badge orange">冷却 ${k.cooldown_left_seconds}s</span>`;
+    if (k.status === 'rate_limited') return '<span class="badge yellow">限流中</span>';
+    return `<span class="badge gray">${k.auto_disabled ? '自动停用' : '已停用'}</span>`;
+  }
+
+  function renderKeyList() {
+    const rows = (keyData && keyData.keys) || [];
+    if (!rows.length) {
+      return `<div class="note gold">
+        ${icon('info', 13)} 还没有添加 Key。池子为空时会自动使用「Agnes API」里旧版单 Key（如果有），
+        但那样只能排队跑，加两把以上才能真正轮换。
+      </div>`;
+    }
+    return `
+      <div class="table-wrap"><table class="tbl">
+        <thead><tr>
+          <th style="width:84px">状态</th><th>备注</th><th style="width:130px">Key</th>
+          <th style="width:92px">RPM</th><th style="width:150px">近 1 分钟</th><th style="width:190px">操作</th>
+        </tr></thead>
+        <tbody>
+          ${rows.map((k) => `
+            <tr>
+              <td>${keyStatusBadge(k)}</td>
+              <td>
+                <div style="color:var(--text)">${esc(k.label)}</div>
+                <div style="font-size:11px;color:var(--text-3);margin-top:2px">
+                  成功 ${k.stats.ok} · 失败 ${k.stats.fail}${k.stats.last_used_at ? ` · 最近 ${esc(fmtTime(k.stats.last_used_at))}` : ''}
+                </div>
+                ${k.stats.last_error ? `<div style="font-size:11px;color:#FCA5A5;margin-top:2px">${esc(k.stats.last_error)}</div>` : ''}
+              </td>
+              <td class="mono" style="font-size:11.5px;color:var(--text-2)">${esc(k.masked)}</td>
+              <td><input class="input" data-rpm="${esc(k.id)}" type="number" min="1" max="600" value="${k.rpm}" style="width:74px;padding:5px 8px" /></td>
+              <td style="font-size:12px;color:var(--text-2)">${k.used_in_window} / ${k.rpm} 次</td>
+              <td>
+                <div class="row" style="gap:4px;flex-wrap:wrap">
+                  <button class="btn btn-xs" data-test-key="${esc(k.id)}">测试</button>
+                  <button class="btn btn-xs" data-toggle-key="${esc(k.id)}" data-enabled="${k.enabled ? '1' : '0'}">${k.enabled ? '停用' : '启用'}</button>
+                  ${k.status !== 'active'
+                    ? `<button class="btn btn-xs" data-revive-key="${esc(k.id)}">恢复</button>`
+                    : ''}
+                  <button class="btn btn-xs" data-del-key="${esc(k.id)}" data-label="${esc(k.label)}" style="color:var(--err)">删除</button>
+                </div>
+              </td>
+            </tr>`).join('')}
+        </tbody>
+      </table></div>`;
+  }
+
+  function renderKeys() {
+    const pool = (keyData && keyData.summary) || settings.key_pool || {};
+    return `
+      <div class="card">
+        <div class="row" style="margin-bottom:12px">
+          <div class="card-title" style="margin:0">${icon('key', 15)}密钥池 · 多 Key 轮换</div>
+          <div class="spacer"></div>
+          <button class="btn btn-sm" id="keys-refresh">${icon('refresh', 13)}刷新</button>
+          <button class="btn btn-sm" id="keys-revive-all">${icon('play', 13)}全部恢复</button>
+        </div>
+        <div class="note gold" style="margin-bottom:14px">
+          ${icon('info', 13)}
+          ${pool.total
+            ? `共 ${pool.total} 把：可用 ${pool.active} · 冷却 ${pool.cooling} · 限流 ${pool.rate_limited} · 停用 ${pool.disabled}`
+            : '还没有 Key'}
+          <span style="margin-left:8px;color:var(--text-3)">某个 Key 被限流或认证失败时会自动换下一把；单把 Key 的每分钟调用数按下面的 RPM 控制。</span>
+        </div>
+        <div id="keys-body">加载中…</div>
+      </div>
+
+      <div class="card" style="margin-top:16px">
+        <div class="card-title">${icon('layers', 15)}轮换策略</div>
+        <div class="grid g2" style="gap:0 14px">
+          <div class="field"><label>轮换方式</label>
+            <select class="select" id="k-mode">
+              <option value="round_robin"${settings.key_rotation_mode !== 'least_used' ? ' selected' : ''}>顺序轮换（均匀摊开）</option>
+              <option value="least_used"${settings.key_rotation_mode === 'least_used' ? ' selected' : ''}>优先用调用最少的</option>
+            </select>
+          </div>
+          <div class="field"><label>新 Key 默认 RPM</label>
+            <input class="input" id="k-rpm" type="number" min="1" max="600" value="${esc(settings.key_default_rpm || 20)}" />
+            <div class="hint">Agnes 免费档大约 20 次/分钟/把；不确定就按 20 填。</div>
+          </div>
+          <div class="field"><label>429 冷却（秒）</label>
+            <input class="input" id="k-cool" type="number" min="5" max="3600" value="${esc(settings.key_cooldown_seconds || 60)}" />
+            <div class="hint">被限流后这把 Key 歇多久再参与轮换。</div>
+          </div>
+          <div class="field"><label>单次请求最多换几把 Key</label>
+            <input class="input" id="k-attempts" type="number" min="1" max="10" value="${esc(settings.key_max_attempts || 3)}" />
+            <div class="hint">调大更抗故障，但一把坏 Key 会拖慢整批任务。</div>
+          </div>
+        </div>
+        <button class="btn btn-primary" id="save-key-policy">${icon('save', 14)}保存策略</button>
+      </div>
+
+      <div class="card" style="margin-top:16px">
+        <div class="card-title">${icon('plus', 15)}添加 Key</div>
+        <div class="field">
+          <label>批量粘贴（一行一把）</label>
+          <textarea class="textarea mono" id="k-new-text" rows="4" placeholder="主号,sk-xxxxxxxx
+备用号,sk-yyyyyyyy
+sk-zzzzzzzz"></textarea>
+          <div class="hint">支持「备注,Key」或「备注 Key」两种写法，只填 Key 也行；重复的会自动跳过。</div>
+        </div>
+        <button class="btn btn-primary" id="k-add">${icon('plus', 14)}添加到密钥池</button>
+        <div id="k-add-out" style="margin-top:12px"></div>
+      </div>`;
+  }
+
+  async function loadKeys() {
+    const body = container.querySelector('#keys-body');
+    const r = await api.keys();
+    if (!r.ok) {
+      if (body) body.innerHTML = `<div class="note red">${icon('x', 13)} ${esc(r.error)}</div>`;
+      return;
+    }
+    keyData = r.data;
+    // 顺手同步一份概况，切回「Agnes API」时不会还显示加 Key 之前的旧数字
+    settings.key_pool = r.data.summary;
+    if (body) body.innerHTML = renderKeyList();
+    const p = container.querySelector('#panel');
+    if (p) bindKeyRows(p);
+  }
+
+  function bindKeyRows(p) {
+    p.querySelectorAll('[data-test-key]').forEach((b) => {
+      b.onclick = async () => {
+        const id = b.getAttribute('data-test-key');
+        const old = b.textContent;
+        b.disabled = true;
+        b.innerHTML = '<div class="spinner sm"></div>';
+        const r = await api.testKey(id, 'text');
+        b.disabled = false;
+        b.textContent = old;
+        if (r.ok) toast.ok(r.data.message || '这把 Key 可用');
+        else toast.err(`${r.error}${r.data?.errorType === 'invalid_api_key' ? '（Key 无效）' : ''}`, 9000);
+        await loadKeys();
+        await refreshState();
+      };
+    });
+
+    p.querySelectorAll('[data-toggle-key]').forEach((b) => {
+      b.onclick = async () => {
+        const id = b.getAttribute('data-toggle-key');
+        const enable = b.getAttribute('data-enabled') !== '1';
+        const r = await api.updateKey(id, { enabled: enable });
+        if (r.ok) {
+          toast.ok(enable ? '已启用' : '已停用');
+          await loadKeys();
+          await refreshState();   // 侧边栏/工作台的「有没有 Key」跟着变
+        } else toast.err(r.error);
+      };
+    });
+
+    p.querySelectorAll('[data-revive-key]').forEach((b) => {
+      b.onclick = async () => {
+        const r = await api.reviveKey(b.getAttribute('data-revive-key'));
+        if (r.ok) { toast.ok('已解除冷却'); await loadKeys(); } else toast.err(r.error);
+      };
+    });
+
+    p.querySelectorAll('[data-del-key]').forEach((b) => {
+      b.onclick = async () => {
+        const ok = await confirm({
+          title: '删除密钥',
+          text: `确定从密钥池删除「${esc(b.getAttribute('data-label'))}」？<br>删除后这把 Key 不再参与轮换。`,
+          danger: true, okText: '删除',
+        });
+        if (!ok) return;
+        const r = await api.deleteKey(b.getAttribute('data-del-key'));
+        if (r.ok) {
+          toast.ok('已删除');
+          await loadKeys();
+          await refreshState();
+        } else toast.err(r.error);
+      };
+    });
+
+    // RPM 失焦保存：每改一次都弹提示太吵，静默保存即可
+    p.querySelectorAll('[data-rpm]').forEach((input) => {
+      input.onchange = async () => {
+        const r = await api.updateKey(input.getAttribute('data-rpm'), { rpm: input.value });
+        if (!r.ok) { toast.err(r.error); return; }
+        await loadKeys();
+      };
+    });
+  }
   function renderModel() {
     const textModels = modelChoices(state.models, 'text', [settings.default_text_model || 'agnes-2.0-flash', 'agnes-2.0-pro']);
     const imageModels = modelChoices(state.models, 'image', [settings.default_image_model || 'agnes-image-2.1-flash']);
@@ -310,17 +500,10 @@ export default async function settings(container, params = {}) {
       p.querySelector('#save-tts').onclick = () => save({ tts_provider: p.querySelector('#tts-provider').value, tts_api_base_url: p.querySelector('#tts-base').value.trim(), tts_model: p.querySelector('#tts-model').value.trim() }, '配音配置已保存');
     }
     if (section === 'api') {
-      const keyInput = p.querySelector('#s-key');
-      p.querySelector('#toggle-key').onclick = () => {
-        keyVisible = !keyVisible;
-        if (keyVisible) { draftKey = ''; keyInput.value = ''; keyInput.disabled = false; keyInput.focus(); }
+      p.querySelector('#save-api').onclick = () => save({ agnes_api_base_url: p.querySelector('#s-base').value.trim() });
+      p.querySelector('#goto-keys').onclick = async () => {
+        section = 'keys';
         render();
-      };
-      p.querySelector('#save-api').onclick = async () => {
-        const patch = { agnes_api_base_url: p.querySelector('#s-base').value.trim() };
-        if (keyVisible && keyInput.value.trim()) patch.agnes_api_key = keyInput.value.trim();
-        await save(patch);
-        keyVisible = false;
       };
       p.querySelector('#refresh-models-api').onclick = async (e) => {
         const btn = e.currentTarget;
@@ -348,6 +531,44 @@ export default async function settings(container, params = {}) {
             : `<div class="note red">${icon('x', 13)} ${esc(r.error)}</div>`;
         };
       });
+    } else if (section === 'keys') {
+      p.querySelector('#keys-refresh').onclick = () => loadKeys();
+      p.querySelector('#keys-revive-all').onclick = async () => {
+        const r = await api.reviveAllKeys();
+        if (r.ok) { toast.ok('已全部解除冷却'); loadKeys(); } else toast.err(r.error);
+      };
+      p.querySelector('#save-key-policy').onclick = () => save({
+        key_rotation_mode: p.querySelector('#k-mode').value,
+        key_default_rpm: p.querySelector('#k-rpm').value,
+        key_cooldown_seconds: p.querySelector('#k-cool').value,
+        key_max_attempts: p.querySelector('#k-attempts').value,
+      }, '轮换策略已保存');
+      p.querySelector('#k-add').onclick = async () => {
+        const ta = p.querySelector('#k-new-text');
+        const text = ta.value.trim();
+        if (!text) { toast.err('先粘贴或输入 Key'); return; }
+        const btn = p.querySelector('#k-add');
+        btn.disabled = true;
+        const r = await api.addKeys({ text });
+        btn.disabled = false;
+        const out = p.querySelector('#k-add-out');
+        if (!r.ok) {
+          out.innerHTML = `<div class="note red">${icon('x', 13)} ${esc(r.error)}</div>`;
+          return;
+        }
+        const added = r.data.added || [];
+        const skipped = r.data.skipped || [];
+        out.innerHTML = `
+          ${added.length ? `<div class="note green">${icon('check', 13)} 已添加 ${added.length} 把：${added.map((k) => esc(k.masked)).join('、')}</div>` : ''}
+          ${skipped.length ? `<div class="note orange">${icon('alert', 13)} ${skipped.length} 行没加进去：${esc(skipped.slice(0, 3).map((s) => s.reason).join('；'))}${skipped.length > 3 ? ' …' : ''}</div>` : ''}`;
+        if (added.length) {
+          ta.value = '';
+          toast.ok(`已添加 ${added.length} 把 Key`);
+          await refreshState();
+        }
+        loadKeys();
+      };
+      loadKeys();
     } else if (section === 'model') {
       p.querySelector('#m-auto').onclick = () => p.querySelector('#m-auto').classList.toggle('on');
       p.querySelector('#refresh-models').onclick = async (e) => {

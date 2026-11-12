@@ -40,6 +40,15 @@ export const api = {
   saveSettings: (patch) => req('PUT', '/api/settings', patch),
   testSettings: (kind) => req('POST', '/api/settings/test', { kind }),
 
+  // 密钥池：列表只含掩码，明文不出后端
+  keys: () => req('GET', '/api/keys'),
+  addKeys: (payload) => req('POST', '/api/keys', payload),
+  updateKey: (id, patch) => req('PUT', `/api/keys/${id}`, patch),
+  deleteKey: (id) => req('DELETE', `/api/keys/${id}`, {}),
+  testKey: (id, kind = 'text') => req('POST', `/api/keys/${id}/test`, { kind }),
+  reviveKey: (id) => req('POST', `/api/keys/${id}/revive`, {}),
+  reviveAllKeys: () => req('POST', '/api/keys/revive-all', {}),
+
   projects: () => req('GET', '/api/projects'),
   createProject: (p) => req('POST', '/api/projects', p),
   updateProject: (id, p) => req('PUT', `/api/projects/${id}`, p),

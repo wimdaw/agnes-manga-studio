@@ -19,6 +19,7 @@
 - 任务中心：服务端后台轮询、SSE 实时状态、超时任务补录 video_id
 - 素材库：角色/场景/道具资产设定，图片、视频、文本、收藏、预览、下载
 - 动态模型目录：从 Agnes 的 OpenAI 兼容 `GET /v1/models` 拉取模型，不需要为新模型改代码
+- 多 Key 轮换：密钥池自动分摊每分钟调用数，被限流或失效时自动换下一把，密钥单独存放、不随备份导出
 - 数据管理：项目导出、全量 JSON 备份和导入
 - 单文件 Windows exe：接收方无需安装 Node.js
 
@@ -105,6 +106,35 @@ GET {API_BASE_URL}/v1/models
 
 模型目录缓存到本地 `models.json`。默认每 24 小时检查一次；也可以在「设置 → 模型配置」中手动刷新或调整缓存策略。拉取失败时会保留上一次成功的目录和旧模型回退项。
 
+## 多 Key 轮换
+
+免费档每把 Key 的 RPM 有限（约 20 次/分钟），一条三四十个镜头的成片靠单 Key 会被限流卡住。
+「设置 → 密钥池」可以放多把 Key，请求自动摊开：
+
+- **轮换**：顺序轮换（默认，均匀摊开）或优先用调用最少的那把
+- **限流**：每把 Key 一个 60 秒滑窗，窗口内达到 RPM 就先跳过它
+- **失败换 Key**：401 / 402 / 403 / 429 自动换下一把重试，单次请求最多换 `key_max_attempts` 把（默认 3）
+- **冷却**：429 冷却 60 秒；余额/额度类 30 分钟；连续 3 次认证失败自动停用（界面上可一键恢复）
+- **超时不重试**：视频提交超时可能已被 Agnes 收下，换 Key 重发等于重复扣费，所以超时一律不换、不重试
+
+密钥存在数据目录的 `keys.json`，**不进 `db.json`，也不随项目导出 / 全量备份一起走**；
+接口只返回 `sk-a****1234` 形式的掩码，明文只在本机服务进程里用。
+
+首次升级时，如果 `keys.json` 还不存在、`settings.json` 里又有旧的单 Key，程序会自动把它迁进密钥池，
+并清空旧字段（避免两处不一致）。池子为空时仍会回退用旧单 Key，老配置不改也能继续跑。
+
+配置项（`settings.json`）：
+
+| 键 | 默认 | 说明 |
+|---|---|---|
+| `key_rotation_mode` | `round_robin` | `round_robin` 顺序 / `least_used` 用最少的 |
+| `key_default_rpm` | `20` | 新加 Key 的每分钟上限 |
+| `key_cooldown_seconds` | `60` | 429 之后的冷却时长 |
+| `key_max_attempts` | `3` | 单次请求最多换几把 Key |
+
+接口：`GET /api/keys`、`POST /api/keys`（传 `{ text }` 可批量粘贴）、`PUT /api/keys/:id`、
+`DELETE /api/keys/:id`、`POST /api/keys/:id/test`、`POST /api/keys/:id/revive`、`POST /api/keys/revive-all`。
+
 ## 图生视频与图床
 
 Agnes 的图生视频只能抓取**公网可访问**的图片，而本地版把图片存在本机。两条路都能走通：
@@ -181,6 +211,7 @@ node tools/build-exe.mjs
 server.js             本地 HTTP 服务与静态资源服务
 lib/store.js          JSON 数据层与模型缓存
 lib/agnes.js          Agnes API 客户端
+lib/keys.js           密钥池：轮换、RPM 滑窗、冷却与脱敏
 lib/poller.js         视频后台轮询与 SSE
 lib/routes.js         REST API 路由
 lib/jobs.js           批量任务队列

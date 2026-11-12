@@ -24,7 +24,7 @@ const os = require('node:os');
 const { spawn, execFile } = require('node:child_process');
 const { createRequire } = require('node:module');
 
-const VERSION = '1.4.0';
+const VERSION = '1.5.0';
 // 资源释放的版本戳用内嵌文件内容哈希（见 materializeAssets），不再依赖版本号。
 
 // ─────────────────────────────────────────────────────────────
@@ -114,6 +114,7 @@ const agnes = libRequire('./lib/agnes.js');
 const poller = libRequire('./lib/poller.js');
 const jobs = libRequire('./lib/jobs.js');
 const seedLib = libRequire('./lib/seed.js');
+const keysLib = libRequire('./lib/keys.js');
 const createRoutes = libRequire('./lib/routes.js');
 
 // ─────────────────────────────────────────────────────────────
@@ -121,6 +122,8 @@ const createRoutes = libRequire('./lib/routes.js');
 // ─────────────────────────────────────────────────────────────
 fs.mkdirSync(APP_HOME, { recursive: true });
 store.init(APP_HOME);
+// 密钥池要在 agnes 第一次取 Key 之前就绪：池子为空时会自动把旧版单 Key 迁移进来
+keysLib.init(APP_HOME);
 jobs.init(APP_HOME);
 for (const d of [store.imagesDir(), store.videosDir(), store.audiosDir(), store.exportsDir()]) {
   try { fs.mkdirSync(d, { recursive: true }); } catch { /* ignore */ }
@@ -132,7 +135,7 @@ const routes = createRoutes({ store, agnes, poller, jobs, version: VERSION });
 
 // 有 Key 且缓存过期时，启动后后台更新模型目录；不阻塞页面启动。
 // 没有 Key 时不主动报错，用户到设置页填 Key 后点「刷新模型」即可。
-if (store.getRawKey() && store.modelsNeedRefresh()) {
+if (keysLib.hasAny() && store.modelsNeedRefresh()) {
   setTimeout(() => routes.refreshModels().catch(() => {}), 800);
 }
 
