@@ -327,7 +327,7 @@ group('视频查询与轮询');
 
   const flashPolicy = poller.policyFor({ model_name: 'agnes-video-2.5-flash' });
   ok('flash 轮询更密（2s）', flashPolicy.flash === true && flashPolicy.intervalMs === 2000, JSON.stringify(flashPolicy));
-  eq('flash 最长轮询 300 次', flashPolicy.maxPolls, 300);
+  eq('flash 最长轮询 3600 次（约 2 小时）', flashPolicy.maxPolls, 3600);
   const paidPolicy = poller.policyFor({ model_name: 'agnes-video-2.5' });
   ok('付费模型用默认节奏', paidPolicy.flash === false && paidPolicy.intervalMs >= 2000, JSON.stringify(paidPolicy));
 }
