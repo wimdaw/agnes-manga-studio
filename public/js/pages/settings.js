@@ -95,7 +95,7 @@ export default async function settings(container, params = {}) {
           <label>API Key</label>
           <div class="note ${pool.total ? 'green' : 'orange'}" style="margin:0">
             ${pool.total
-              ? `${icon('key', 13)} 密钥池 ${pool.total} 把：可用 ${pool.active} · 冷却 ${pool.cooling} · 限流 ${pool.rate_limited} · 停用 ${pool.disabled}`
+              ? `${icon('key', 13)} 密钥池 ${pool.total}/${pool.max || 20} 把：可用 ${pool.active} · 冷却 ${pool.cooling} · 限流 ${pool.rate_limited} · 停用 ${pool.disabled}`
               : (has
                 ? `${icon('key', 13)} 正在用旧版单 Key（${esc(settings.agnes_api_key_masked || '')}），只能单线程跑，容易被限流。`
                 : `${icon('alert', 13)} 还没有可用 Key，无法生成内容。`)}
@@ -210,6 +210,10 @@ export default async function settings(container, params = {}) {
           <div class="field"><label>单次请求最多换几把 Key</label>
             <input class="input" id="k-attempts" type="number" min="1" max="10" value="${esc(settings.key_max_attempts || 3)}" />
             <div class="hint">调大更抗故障，但一把坏 Key 会拖慢整批任务。</div>
+          </div>
+          <div class="field"><label>密钥池上限（把）</label>
+            <input class="input" id="k-max" type="number" min="1" max="5000" value="${esc(settings.key_pool_max || 20)}" />
+            <div class="hint">批量换号时可调大（上限 5000）。调小不会删已有 Key，只拒绝新增。</div>
           </div>
         </div>
         <button class="btn btn-primary" id="save-key-policy">${icon('save', 14)}保存策略</button>
@@ -544,6 +548,7 @@ sk-zzzzzzzz"></textarea>
         key_default_rpm: p.querySelector('#k-rpm').value,
         key_cooldown_seconds: p.querySelector('#k-cool').value,
         key_max_attempts: p.querySelector('#k-attempts').value,
+        key_pool_max: p.querySelector('#k-max').value,
       }, '轮换策略已保存');
       p.querySelector('#k-add').onclick = async () => {
         const ta = p.querySelector('#k-new-text');

@@ -638,6 +638,17 @@ sk-main-11111111
   eq('空格写法的备注解析正确', keys.list().find((k) => k.masked.endsWith('2222')).label, '备用');
   eq('池子里共 4 把', keys.summary().total, 4);
 
+  // 上限可配置：调小拒绝新增，调大放行，summary 要如实反映当前上限
+  store.setSettings({ key_pool_max: '2' });
+  eq('summary 反映可配置上限', keys.summary().max, 2);
+  const over = keys.add({ label: '超额', key: 'sk-over-44444444' });
+  ok('超过上限被拒绝', over.ok === false && /上限/.test(over.error), JSON.stringify(over));
+  store.setSettings({ key_pool_max: '50' });
+  const raised = keys.add({ label: '放行', key: 'sk-over-44444444' });
+  ok('调高上限后可添加', raised.ok === true);
+  keys.remove(raised.key.id);
+  store.setSettings({ key_pool_max: '20' });
+
   const dumped = JSON.stringify(keys.list());
   ok('列表接口不含明文 Key', !dumped.includes('sk-main-11111111'), dumped.slice(0, 150));
   ok('掩码保留尾号便于辨认', /\*+1111$/.test(keys.list().find((k) => k.label === '主号').masked));
