@@ -77,11 +77,13 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          mkdir -p pkg
-          cp "dist/Agnes漫剧工坊" pkg/AgnesStudio
-          chmod +x pkg/AgnesStudio
-          cp .github/macos-readme.txt pkg/使用说明.txt
-          ditto -c -k --sequesterRsrc --keepParent pkg "${{ matrix.asset }}"
+          # 目录和文件名都用 ASCII：ditto 打的 zip 不带 UTF-8 标记，
+          # 中文名在部分解压工具里会变成乱码
+          mkdir -p "AgnesStudio-macos"
+          cp "dist/Agnes漫剧工坊" "AgnesStudio-macos/AgnesStudio"
+          chmod +x "AgnesStudio-macos/AgnesStudio"
+          cp .github/macos-readme.txt "AgnesStudio-macos/README-macOS.txt"
+          ditto -c -k --sequesterRsrc --keepParent "AgnesStudio-macos" "${{ matrix.asset }}"
           ls -lh "${{ matrix.asset }}"
 
       - uses: actions/upload-artifact@v4
