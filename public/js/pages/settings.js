@@ -129,13 +129,19 @@ export default async function settings(container, params = {}) {
 
   function renderKeyList() {
     const rows = (keyData && keyData.keys) || [];
+    const total = Number(keyData && keyData.total) || rows.length;
     if (!rows.length) {
       return `<div class="note gold">
         ${icon('info', 13)} 还没有添加 Key。池子为空时会自动使用「Agnes API」里旧版单 Key（如果有），
         但那样只能排队跑，加两把以上才能真正轮换。
       </div>`;
     }
+    // 列表只渲染服务端返回的这一页；几万把时全量渲染会把页面卡死
+    const more = total > rows.length
+      ? `<div class="note gold">${icon('info', 13)} 共 ${total} 把，当前只显示前 ${rows.length} 把；轮换会使用全部 Key。</div>`
+      : '';
     return `
+      ${more}
       <div class="table-wrap"><table class="tbl">
         <thead><tr>
           <th style="width:84px">状态</th><th>备注</th><th style="width:130px">Key</th>
@@ -212,8 +218,8 @@ export default async function settings(container, params = {}) {
             <div class="hint">调大更抗故障，但一把坏 Key 会拖慢整批任务。</div>
           </div>
           <div class="field"><label>密钥池上限（把）</label>
-            <input class="input" id="k-max" type="number" min="1" max="5000" value="${esc(settings.key_pool_max || 20)}" />
-            <div class="hint">批量换号时可调大（上限 5000）。调小不会删已有 Key，只拒绝新增。</div>
+            <input class="input" id="k-max" type="number" min="1" max="50000" value="${esc(settings.key_pool_max || 50000)}" />
+            <div class="hint">批量换号时可调大，最多 5 万。调小不会删已有 Key，只拒绝新增。</div>
           </div>
         </div>
         <button class="btn btn-primary" id="save-key-policy">${icon('save', 14)}保存策略</button>

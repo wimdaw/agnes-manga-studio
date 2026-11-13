@@ -647,7 +647,9 @@ sk-main-11111111
   const raised = keys.add({ label: '放行', key: 'sk-over-44444444' });
   ok('调高上限后可添加', raised.ok === true);
   keys.remove(raised.key.id);
-  store.setSettings({ key_pool_max: '20' });
+  store.setSettings({ key_pool_max: '999999' });
+  eq('上限夹到 50000', keys.summary().max, 50000);
+  store.setSettings({ key_pool_max: '50000' });
 
   const dumped = JSON.stringify(keys.list());
   ok('列表接口不含明文 Key', !dumped.includes('sk-main-11111111'), dumped.slice(0, 150));
