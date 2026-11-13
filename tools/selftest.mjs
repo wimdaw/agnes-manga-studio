@@ -21,6 +21,7 @@ const seed = require('./lib/seed.js');
 const createRoutes = require('./lib/routes.js');
 const imagehost = require('./lib/imagehost.js');
 const keys = require('./lib/keys.js');
+const poller = require('./lib/poller.js');
 
 let pass = 0;
 let fail = 0;
@@ -311,6 +312,24 @@ group('视频请求体');
   eq('高级参数不覆盖 prompt', ex.prompt, 'real');
   eq('高级参数不覆盖 model', ex.model, 'agnes-video-2.5');
   eq('高级参数新字段透传', ex.foo, 1);
+}
+
+// ── 4c. 视频查询与轮询策略（Flash 专用）─────────────────────
+group('视频查询与轮询');
+{
+  // reference/keyframe 任务查询必须带 model_name，否则一律 task not found
+  const u25 = agnes.videoQueryUrl('task_abc', 'agnes-video-2.5-flash');
+  ok('2.5 查询带 model_name', /model_name=agnes-video-2.5-flash/.test(u25), u25);
+  const u25p = agnes.videoQueryUrl('task_abc', 'agnes-video-2.5');
+  ok('付费 2.5 也带 model_name', /model_name=agnes-video-2.5/.test(u25p), u25p);
+  const u20 = agnes.videoQueryUrl('video_abc', 'agnes-video-v2.0');
+  ok('2.0 查询不带 model_name', !/model_name=/.test(u20), u20);
+
+  const flashPolicy = poller.policyFor({ model_name: 'agnes-video-2.5-flash' });
+  ok('flash 轮询更密（2s）', flashPolicy.flash === true && flashPolicy.intervalMs === 2000, JSON.stringify(flashPolicy));
+  eq('flash 最长轮询 300 次', flashPolicy.maxPolls, 300);
+  const paidPolicy = poller.policyFor({ model_name: 'agnes-video-2.5' });
+  ok('付费模型用默认节奏', paidPolicy.flash === false && paidPolicy.intervalMs >= 2000, JSON.stringify(paidPolicy));
 }
 
 // ── 5b. 图床（本地图片 → 公网地址，图生视频的关键链路） ──────
