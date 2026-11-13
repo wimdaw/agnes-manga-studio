@@ -41,6 +41,12 @@ const valueOf = (flag, fallback) => {
 };
 const OUT_NAME = valueOf('--out', DEFAULT_OUT);
 const OUT_DIR = path.resolve(valueOf('--dist', DIST));
+/**
+ * 宿主运行时：默认是当前进程的 node。
+ * 交叉构建 arm64 时传 --node-bin 指向官方 arm64 的 node，
+ * 用 Intel 机器也能产出 arm64 产物（blob 与架构无关，签名也能跨架构做）。
+ */
+const NODE_BIN = path.resolve(valueOf('--node-bin', NODE));
 const VERSION = JSON.parse(fs.readFileSync(path.join(ROOT, 'package.json'), 'utf8')).version || '0.0.0';
 
 const log = (n, s) => console.log(`\n[${n}] ${s}`);
@@ -98,11 +104,13 @@ async function main() {
   assert(fs.existsSync(path.join(ROOT, 'server.js')), '缺少 server.js');
   assert(fs.existsSync(path.join(ROOT, 'public', 'index.html')), '缺少 public/index.html');
   const postject = loadPostject();
+  assert(fs.existsSync(NODE_BIN), `宿主运行时不存在：${NODE_BIN}`);
 
   fs.mkdirSync(BUILD, { recursive: true });
   fs.mkdirSync(OUT_DIR, { recursive: true });
 
   console.log(`  平台 ${PLATFORM}/${process.arch} · Node ${process.versions.node} · 版本 ${VERSION}`);
+  console.log(`  宿主运行时 ${NODE_BIN}`);
 
   // 1. 收集静态资源。数据目录不打进发行包，避免把用户数据污染进去。
   log(1, '收集内嵌资源');
@@ -135,7 +143,7 @@ async function main() {
   log(3, '注入 Node 运行时');
   const tmpBin = path.join(BUILD, `AgnesStudio-${process.pid}${IS_WIN ? '.exe' : ''}`);
   const outBin = path.join(OUT_DIR, OUT_NAME);
-  fs.copyFileSync(NODE, tmpBin);
+  fs.copyFileSync(NODE_BIN, tmpBin);
   fs.chmodSync(tmpBin, 0o755);
   const fuse = findFuse(tmpBin);
   console.log(`  fuse ${fuse}`);

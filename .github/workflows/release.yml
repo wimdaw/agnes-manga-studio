@@ -25,9 +25,12 @@ jobs:
           - os: macos-15-intel
             label: macos-x64
             asset: AgnesStudio-macos-x64.zip
-          - os: macos-15
+          # arm64 runner 排队不可控，改为在 Intel 镜像上下载官方 arm64 Node
+          # 作为宿主运行时交叉产出；blob 与签名都跨架构可用
+          - os: macos-15-intel
             label: macos-arm64
             asset: AgnesStudio-macos-arm64.zip
+            node_arch: arm64
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
@@ -40,8 +43,27 @@ jobs:
       - name: Install build dependency
         run: npm ci --no-audit --no-fund || npm install --no-audit --no-fund
 
+      - name: Fetch arm64 Node runtime
+        if: matrix.node_arch == 'arm64'
+        shell: bash
+        run: |
+          set -euo pipefail
+          V="$(node -v)"
+          URL="https://nodejs.org/dist/${V}/node-${V}-darwin-arm64.tar.gz"
+          echo "downloading ${URL}"
+          curl -fsSL "$URL" -o "${RUNNER_TEMP}/node-arm64.tar.gz"
+          mkdir -p .node-arm64
+          tar -xzf "${RUNNER_TEMP}/node-arm64.tar.gz" -C .node-arm64 --strip-components=1
+          echo "NODE_BIN=$PWD/.node-arm64/bin/node" >> "$GITHUB_ENV"
+
       - name: Build single-file binary
+        if: matrix.node_arch != 'arm64'
         run: node tools/build-exe.mjs
+
+      - name: Build single-file binary (arm64 host runtime)
+        if: matrix.node_arch == 'arm64'
+        shell: bash
+        run: node tools/build-exe.mjs --node-bin "$NODE_BIN"
 
       - name: Package (Windows)
         if: runner.os == 'Windows'
@@ -93,7 +115,13 @@ jobs:
           echo "publishing ${TAG}"
           ls -lh artifacts
           (cd artifacts && sha256sum * > SHA256SUMS.txt)
-          gh release create "${TAG}" artifacts/* \
-            --repo "${GITHUB_REPOSITORY}" \
-            --title "Agnes 漫剧工坊 ${TAG}" \
-            --notes-file .github/release-notes.md
+          if gh release view "${TAG}" --repo "${GITHUB_REPOSITORY}" >/dev/null 2>&1; then
+            # 重跑同一版本时覆盖资产，避免 "release already exists" 让流水线假失败
+            gh release upload "${TAG}" artifacts/* --clobber --repo "${GITHUB_REPOSITORY}"
+            gh release edit "${TAG}" --notes-file .github/release-notes.md --repo "${GITHUB_REPOSITORY}"
+          else
+            gh release create "${TAG}" artifacts/* \
+              --repo "${GITHUB_REPOSITORY}" \
+              --title "Agnes 漫剧工坊 ${TAG}" \
+              --notes-file .github/release-notes.md
+          fi
